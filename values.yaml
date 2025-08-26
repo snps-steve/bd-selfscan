@@ -1,5 +1,6 @@
-# BD SelfScan Default Configuration Values
-# This file contains default configuration values for the BD SelfScan Helm chart
+# BD SelfScan Enhanced Configuration Values
+# This file contains enhanced configuration values for the BD SelfScan Helm chart
+# Includes security best practices and DevSecOps improvements
 
 # Global configuration
 global:
@@ -12,10 +13,16 @@ fullnameOverride: ""
 # Container registry configuration
 registry:
   imagePullSecrets: []
+  # Optional: Configure private registry authentication
+  # imagePullSecrets:
+  #   - name: "private-registry-secret"
+  #   - name: "docker-hub-secret"
 
 # RBAC configuration
 rbac:
   create: true
+  # Use cluster-wide permissions (required for multi-namespace scanning)
+  clusterRole: true
   serviceAccount:
     create: true
     name: ""
@@ -27,6 +34,9 @@ blackduck:
   trustCert: true
   connectionTimeout: 120
   readTimeout: 300
+  # Additional Black Duck settings
+  verifySsl: false  # Set to true in production with proper certificates
+  apiVersion: "2023.7.0"  # Specify API version for compatibility
 
 # On-demand scanning configuration (Phase 1)
 onDemand:
@@ -35,6 +45,16 @@ onDemand:
 # Automated scanning configuration (Phase 2)
 automated:
   enabled: false
+  # Controller configuration for Phase 2
+  controller:
+    replicas: 1
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
 
 # Scan target (for on-demand scanning)
 scanTarget: ""
@@ -47,12 +67,12 @@ configMap:
   applications:
     name: "bd-selfscan-applications"
 
-# Scanner configuration
+# Scanner configuration with enhanced security
 scanner:
   image: "ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest"  
   imagePullPolicy: "IfNotPresent"
   
-  # Resource limits and requests
+  # Resource limits and requests - optimized for performance and security
   resources:
     requests:
       memory: "2Gi"
@@ -70,126 +90,251 @@ scanner:
     ttlSecondsAfterFinished: 86400  # 24 hours
     parallelism: 1
     completions: 1
-    # Pod-level security context - run as root for Black Duck operations
+    
+    # Pod-level security context with configurable security levels
     securityContext:
-      runAsUser: 0
+      # Security Level 1: Maximum compatibility (current default for BD requirements)
+      runAsNonRoot: false  # BD scanning may require root
+      runAsUser: 0         # Root user for container operations
       runAsGroup: 0
       fsGroup: 0
+      
+      # Security Level 2: Enhanced security (uncomment to use)
+      # runAsNonRoot: true   # Preferred for security
+      # runAsUser: 1000      # Non-root scanner user from Dockerfile
+      # runAsGroup: 1000
+      # fsGroup: 1000
+      # fsGroupChangePolicy: "OnRootMismatch"
   
-  # Container security context - more permissive for Black Duck scanning
+  # Container security context with defense-in-depth approach
   containerSecurityContext:
-    allowPrivilegeEscalation: true  # BD scanning may need this
-    readOnlyRootFilesystem: false   # Needed for temp files
-    runAsUser: 0                    # Ensure container runs as root
+    # Current permissive settings for BD compatibility
+    allowPrivilegeEscalation: false  # Prevent privilege escalation
+    readOnlyRootFilesystem: false    # BD tools need write access to temp dirs
+    runAsUser: 0                     # Override if job.securityContext.runAsUser is set
+    
+    # Capability management - only grant what's needed
     capabilities:
-      add:                          # Capabilities needed for scanning
-        - CHOWN
-        - DAC_OVERRIDE
-        - FOWNER
-        - SETGID
-        - SETUID
-        - SYS_ADMIN
       drop:
-        - NET_RAW
+        - ALL  # Drop all capabilities first
+      add:
+        # Minimal capabilities for Black Duck operations
+        - CHOWN         # File ownership changes
+        - DAC_OVERRIDE  # Bypass file permission checks
+        - FOWNER        # Bypass permission checks for file operations
+        # Remove if not needed after testing:
+        # - SETGID      # Only if group changes are required
+        # - SETUID      # Only if user changes are required
+        # - SYS_ADMIN   # Remove if container operations work without it
+    
+    # Secure alternative configuration (test with your BD setup)
+    # allowPrivilegeEscalation: false
+    # readOnlyRootFilesystem: true   # Enable if BD tools support it
+    # runAsNonRoot: true
+    # runAsUser: 1000
+    # capabilities:
+    #   drop: ["ALL"]
+    #   add: ["DAC_OVERRIDE"]  # Minimal required capability
   
-  # Node selection
+  # Node selection and scheduling
   nodeSelector: {}
   tolerations: []
   affinity: {}
   
-  # Docker socket access (if needed for container operations)
+  # Advanced scheduling for production
+  # nodeSelector:
+  #   node-type: "scanner-nodes"  # Dedicated nodes for scanning workloads
+  # tolerations:
+  #   - key: "scanner-only"
+  #     operator: "Equal"
+  #     value: "true"
+  #     effect: "NoSchedule"
+  
+  # Docker socket access (disable for enhanced security)
   dockerSocket:
-    enabled: false
+    enabled: false  # Preferred: false for security
+    # enabled: true  # Only if container inspection requires direct Docker access
 
-# Scanning configuration
+# Scanning configuration with enhanced controls
 scanning:
   projectTier: 3
   policyFailSeverities: "CRITICAL,BLOCKER"
+  
+  # Performance tuning
   imageDownloadTimeout: 600
   imageDownloadRetries: 3
   scanTimeout: 1800
   maxConcurrentScans: 3
   maxConcurrentDownloads: 2
+  
+  # Cleanup and retention
   cleanupInterval: 7200
   keepSuccessfulJobs: 5
   keepFailedJobs: 10
+  
+  # Enhanced security scanning options
+  enableVulnerabilityScanning: true
+  enableLicenseScanning: true
+  enableOperationalRisks: true
+  
+  # Policy enforcement
+  enforceProjectTierPolicies: true
+  blockDeploymentOnPolicyViolation: false  # Set to true for production enforcement
 
-# Debug configuration
+# Debug and observability configuration
 debug:
-  enabled: true                     # Good for initial troubleshooting
-  logLevel: "INFO"                  # DEBUG, INFO, WARNING, ERROR
+  enabled: true
+  logLevel: "INFO"  # DEBUG, INFO, WARNING, ERROR
   keepTempFiles: false
+  enableVerboseLogging: false
+  enablePerformanceMetrics: true
 
-# Monitoring configuration (Phase 2)
+# Monitoring and observability
 monitoring:
-  enabled: false
+  enabled: true
+  
+  # Prometheus integration
   serviceMonitor:
-    enabled: false
-    namespace: ""
-    labels: {}
+    enabled: false  # Set to true if Prometheus operator is available
     interval: "30s"
     scrapeTimeout: "10s"
-  prometheusRule:
+    labels: {}
+    
+  # Grafana dashboard
+  grafana:
     enabled: false
-
-# Controller configuration (Phase 2)
-controller:
-  enabled: false
-  image: "python:3.11-slim"
-  imagePullPolicy: "IfNotPresent"
-  replicas: 1
-  resources:
-    requests:
-      memory: "256Mi"
-      cpu: "100m"
-    limits:
-      memory: "512Mi"
-      cpu: "500m"
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-  service:
-    type: ClusterIP
-    port: 8080
-    targetPort: 8080
-  metrics:
+    dashboardLabel: "grafana_dashboard"
+    datasource: "Prometheus"
+    
+  # Health checks and probes
+  healthCheck:
     enabled: true
-    port: 8080
-    path: "/metrics"
-  health:
-    enabled: true
+    endpoint: "/health"
     port: 8081
-    path: "/health"
-    readiness:
-      initialDelaySeconds: 5
-      periodSeconds: 5
-    liveness:
-      initialDelaySeconds: 30
-      periodSeconds: 10
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 3
 
-# Scheduled scanning configuration (Phase 2)
-scheduled:
-  enabled: false
-  jobs: []
-
-# Network policy configuration
+# Network security configuration
 networkPolicy:
-  enabled: false
-  ingress: []
-  egress: []
+  enabled: false  # Enable for production environments
+  
+  # Ingress rules (incoming traffic)
+  ingress:
+    - from: []  # Allow from any source (customize as needed)
+      ports:
+        - protocol: TCP
+          port: 8081  # Health check port
+  
+  # Egress rules (outgoing traffic)
+  egress:
+    # Allow Kubernetes API access
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: TCP
+          port: 443
+    
+    # Allow Black Duck server access
+    - to: []  # Customize with specific server endpoints
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+    
+    # Allow container registry access
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+    
+    # DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
 
-# Resource quota management 
-resourceQuota:
-  enabled: false
-  hard:
-    limits.cpu: "16"
-    limits.memory: "64Gi"
-    limits.ephemeral-storage: "500Gi"
-    persistentvolumeclaims: "0"
-    requests.cpu: "8"
-    requests.memory: "32Gi"
+# Pod Security Standards compliance
+podSecurityStandards:
+  enforce: "baseline"  # baseline, restricted, privileged
+  audit: "restricted"
+  warn: "restricted"
+  
+  # Custom pod security policy (if needed)
+  customPodSecurityPolicy:
+    enabled: false
+    name: "bd-selfscan-psp"
 
-# Pod disruption budget (for Phase 2 controller)
-podDisruptionBudget:
+# Advanced configuration
+advanced:
+  # Custom environment variables
+  extraEnvVars: []
+  # - name: CUSTOM_VAR
+  #   value: "custom-value"
+  
+  # Additional volumes
+  extraVolumes: []
+  # - name: custom-config
+  #   configMap:
+  #     name: custom-config-map
+  
+  # Additional volume mounts
+  extraVolumeMounts: []
+  # - name: custom-config
+  #   mountPath: /etc/custom
+  #   readOnly: true
+  
+  # Custom annotations
+  podAnnotations: {}
+  # annotation-key: "annotation-value"
+  
+  # Priority class for pod scheduling
+  priorityClassName: ""
+  # priorityClassName: "high-priority"
+  
+  # Pod disruption budget
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+    # maxUnavailable: 1
+
+# Backup and disaster recovery
+backup:
   enabled: false
-  minAvailable: 1
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  retention: "7d"
+  
+  # Configuration backup
+  configBackup:
+    enabled: true
+    includeSecrets: false  # Don't backup secrets for security
+    
+  # Results backup (to external storage)
+  resultsBackup:
+    enabled: false
+    storage:
+      type: "s3"  # s3, gcs, azure
+      bucket: ""
+      prefix: "bd-selfscan-backups/"
+
+# Testing and validation
+testing:
+  enabled: false
+  
+  # Test configuration validation
+  validateConfig: true
+  validateConnectivity: true
+  validatePermissions: true
+  
+  # Load testing
+  loadTest:
+    enabled: false
+    concurrentScans: 5
+    testDuration: "10m"
