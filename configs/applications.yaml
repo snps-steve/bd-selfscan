@@ -2,7 +2,7 @@
 # Maps Kubernetes applications to Black Duck Project Groups
 
 applications:
-  # Test case - Your BD SCA deployment
+  # Test case - My BD SCA deployment
   - name: "Black Duck SCA"
     namespace: "bd"
     labelSelector: "app=blackduck"
@@ -10,7 +10,7 @@ applications:
     projectTier: 2
     scanOnDeploy: true
     scanSchedule: "0 2 * * 0"  # Weekly Sunday 2AM (Phase 2)
-    description: "Black Duck SCA platform components for vulnerability scanning"
+    description: "Black Duck SCA platform components for vulnerability and license scanning"
 
 # Configuration Schema Documentation:
 #

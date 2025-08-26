@@ -1,49 +1,161 @@
-# BD SelfScan values.yaml - Updated to use custom image
-
-scanner:
-  # Use your custom-built image instead of installing tools at runtime
-  image: "your-registry.com/bd-selfscan-scanner:latest"  # Update this!
-  imagePullPolicy: Always
-  
-  # Resource requirements (can be lower since tools are pre-installed)
-  resources:
-    requests:
-      memory: "2Gi"      # Reduced since no package installation
-      cpu: "500m"        # Reduced startup time
-      ephemeralStorage: "20Gi"
-    limits:
-      memory: "8Gi"      # Still need memory for scanning
-      cpu: "4"           # Parallel processing
-      ephemeralStorage: "50Gi"
-  
-  # Job configuration
-  job:
-    backoffLimit: 3
-    activeDeadlineSeconds: 5400  # 1.5 hours
-    ttlSecondsAfterFinished: 86400  # 24 hours
-    parallelism: 1
-    completions: 1
-    
-    # Security context - can run as non-root since tools are pre-installed
-    securityContext:
-      runAsNonRoot: true   # Changed: tools already installed
-      runAsUser: 1000      # Changed: use scanner user
-      runAsGroup: 1000
-      fsGroup: 1000
-      
-  # Container security context
-  containerSecurityContext:
-    allowPrivilegeEscalation: false
-    readOnlyRootFilesystem: false  # Still need /tmp for scanning
-    capabilities:
-      drop:
-        - ALL
-
-# Registry configuration (if using private registry)
-registry:
-  imagePullSecrets:
-    - name: "your-registry-secret"  # Add if needed
+# BD SelfScan Default Configuration Values
+# This file contains default configuration values for the BD SelfScan Helm chart
 
 # Global configuration
 global:
   namespace: "bd-selfscan-system"
+
+# Chart metadata
+nameOverride: ""
+fullnameOverride: ""
+
+# RBAC configuration
+rbac:
+  create: true
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+# Black Duck configuration
+blackduck:
+  tokenSecretName: "blackduck-creds"
+  trustCert: true
+
+# On-demand scanning configuration (Phase 1)
+onDemand:
+  enabled: true
+
+# Automated scanning configuration (Phase 2)
+automated:
+  enabled: false
+
+# Scan target (for on-demand scanning)
+scanTarget: ""
+
+# Application configuration
+applications: []
+
+# ConfigMap configuration
+configMap:
+  applications:
+    name: "bd-selfscan-applications"
+
+# Scanner configuration
+scanner:
+  image: "bd-selfscan:latest"
+  imagePullPolicy: "IfNotPresent"
+  
+  # Resource limits and requests
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "500m"
+      ephemeral-storage: "10Gi"
+    limits:
+      memory: "8Gi"
+      cpu: "4"
+      ephemeral-storage: "50Gi"
+  
+  # Job configuration
+  job:
+    backoffLimit: 3
+    activeDeadlineSeconds: 3600
+    ttlSecondsAfterFinished: 86400  # 24 hours
+    parallelism: 1
+    completions: 1
+    # Pod-level security context - run as root for Black Duck operations
+    securityContext:
+      runAsUser: 0
+      runAsGroup: 0
+      fsGroup: 0
+  
+  # Container security context - more permissive for Black Duck scanning
+  containerSecurityContext:
+    allowPrivilegeEscalation: true  # Changed: BD scanning may need this
+    readOnlyRootFilesystem: false   # Needed for temp files
+    runAsUser: 0                    # Added: ensure container runs as root
+    capabilities:
+      add:                          # Added: capabilities needed for scanning
+        - CHOWN
+        - DAC_OVERRIDE
+        - FOWNER
+        - SETGID
+        - SETUID
+        - SYS_ADMIN
+      drop:
+        - NET_RAW
+  
+  # Node selection
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  
+  # Docker socket access (if needed for container operations)
+  dockerSocket:
+    enabled: false
+
+# Scanning configuration
+scanning:
+  projectTier: 3
+  policyFailSeverities: "CRITICAL,BLOCKER"
+  imageDownloadTimeout: 600
+  imageDownloadRetries: 3
+  scanTimeout: 1800
+
+# Registry configuration
+registry:
+  imagePullSecrets: []
+
+# Debug configuration
+debug:
+  enabled: true                     # Changed: enable for troubleshooting
+  logLevel: "INFO"
+  keepTempFiles: false
+
+# Monitoring configuration (Phase 2)
+monitoring:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    labels: {}
+    interval: "30s"
+    scrapeTimeout: "10s"
+
+# Controller configuration (Phase 2)
+controller:
+  enabled: false
+  image: "python:3.11-slim"
+  imagePullPolicy: "IfNotPresent"
+  replicas: 1
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  service:
+    type: ClusterIP
+    port: 8080
+    targetPort: 8080
+  metrics:
+    enabled: true
+    port: 8080
+    path: "/metrics"
+  health:
+    enabled: true
+    port: 8081
+    path: "/health"
+
+# Scheduled scanning configuration (Phase 2)
+scheduled:
+  enabled: false
+  jobs: []
+
+# Network policy configuration
+networkPolicy:
+  enabled: false
+  ingress: []
+  egress: []
