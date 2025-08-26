@@ -18,17 +18,17 @@ keywords:
   - devsecops
   - kubernetes
   - bdsc
+  - synopsys
 
 # Chart maintainers
 maintainers:
-  - name: Your Organization
-    email: security@your-org.com
-    url: https://your-org.com
+  - name: Steve Kemp
+    email: steve.kemp@synopsys.com
 
 # Chart home and source URLs  
-home: https://github.com/your-org/bd-selfscan
+home: https://github.com/snps-steve/bd-selfscan
 sources:
-  - https://github.com/your-org/bd-selfscan
+  - https://github.com/snps-steve/bd-selfscan
 
 # Minimum Kubernetes version required
 kubeVersion: ">=1.25.0-0"

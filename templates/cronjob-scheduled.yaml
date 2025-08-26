@@ -1,0 +1,203 @@
+{{- if and .Values.automated.enabled .Values.automated.scheduled.enabled }}
+{{- range $app := .Values.applications }}
+{{- if and $app.scanSchedule (not (empty $app.scanSchedule)) }}
+---
+# Scheduled scan CronJob for {{ $app.name }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "bd-selfscan.name" $ }}-{{ $app.name | lower | replace " " "-" | replace "_" "-" }}
+  namespace: {{ $.Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: scheduled-scanner
+    bd-selfscan/application: {{ $app.name | quote }}
+    bd-selfscan/schedule-type: "automatic"
+  annotations:
+    bd-selfscan/target-application: {{ $app.name | quote }}
+    bd-selfscan/target-namespace: {{ $app.namespace | quote }}
+    bd-selfscan/scan-schedule: {{ $app.scanSchedule | quote }}
+spec:
+  # Schedule from application configuration
+  schedule: {{ $app.scanSchedule | quote }}
+  
+  # CronJob configuration
+  concurrencyPolicy: Forbid  # Don't run concurrent scans for same app
+  failedJobsHistoryLimit: {{ $.Values.automated.scheduled.failedJobsHistoryLimit | default 3 }}
+  successfulJobsHistoryLimit: {{ $.Values.automated.scheduled.successfulJobsHistoryLimit | default 1 }}
+  startingDeadlineSeconds: {{ $.Values.automated.scheduled.startingDeadlineSeconds | default 300 }}
+  
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "bd-selfscan.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: scheduled-scanner
+        bd-selfscan/application: {{ $app.name | quote }}
+        scan-type: scheduled
+      annotations:
+        bd-selfscan/target-application: {{ $app.name | quote }}
+        bd-selfscan/scan-type: "scheduled"
+        bd-selfscan/created-by: "cronjob"
+    spec:
+      # Job configuration
+      backoffLimit: {{ $.Values.scanner.job.backoffLimit }}
+      {{- if $.Values.scanner.job.activeDeadlineSeconds }}
+      activeDeadlineSeconds: {{ $.Values.scanner.job.activeDeadlineSeconds }}
+      {{- end }}
+      {{- if $.Values.scanner.job.ttlSecondsAfterFinished }}
+      ttlSecondsAfterFinished: {{ $.Values.scanner.job.ttlSecondsAfterFinished }}
+      {{- end }}
+      
+      template:
+        metadata:
+          labels:
+            {{- include "bd-selfscan.selectorLabels" $ | nindent 12 }}
+            app.kubernetes.io/component: scheduled-scanner
+            bd-selfscan/application: {{ $app.name | quote }}
+            scan-type: scheduled
+          annotations:
+            bd-selfscan/target-application: {{ $app.name | quote }}
+            bd-selfscan/scan-schedule: {{ $app.scanSchedule | quote }}
+        spec:
+          serviceAccountName: {{ include "bd-selfscan.serviceAccountName" $ }}
+          restartPolicy: Never
+          
+          # Security context
+          {{- with $.Values.scanner.job.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          
+          # Node selection
+          {{- with $.Values.scanner.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          
+          {{- with $.Values.scanner.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          
+          {{- with $.Values.scanner.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          
+          # Image pull secrets
+          {{- with $.Values.registry.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          
+          containers:
+            - name: scanner
+              image: {{ $.Values.scanner.image }}
+              imagePullPolicy: {{ $.Values.scanner.imagePullPolicy }}
+              
+              # Command execution
+              command: ["/scripts/scan-application.sh"]
+              args: [{{ $app.name | quote }}]
+              
+              # Environment variables
+              env:
+                # Black Duck configuration
+                - name: BD_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ $.Values.blackduck.tokenSecretName }}
+                      key: url
+                      optional: false
+                - name: BD_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ $.Values.blackduck.tokenSecretName }}
+                      key: token
+                      optional: false
+                - name: TRUST_CERT
+                  value: "{{ $.Values.blackduck.trustCert }}"
+                
+                # Scanning configuration
+                - name: PROJECT_TIER
+                  value: "{{ $app.projectTier | default $.Values.scanning.projectTier }}"
+                - name: POLICY_FAIL_SEVERITIES
+                  value: {{ $.Values.scanning.policyFailSeverities | quote }}
+                - name: IMAGE_DOWNLOAD_TIMEOUT
+                  value: "{{ $.Values.scanning.imageDownloadTimeout }}"
+                - name: IMAGE_DOWNLOAD_RETRIES
+                  value: "{{ $.Values.scanning.imageDownloadRetries }}"
+                - name: SCAN_TIMEOUT
+                  value: "{{ $.Values.scanning.scanTimeout }}"
+                
+                # Debug configuration
+                - name: DEBUG_ENABLED
+                  value: "{{ $.Values.debug.enabled }}"
+                - name: LOG_LEVEL
+                  value: {{ $.Values.debug.logLevel | quote }}
+                - name: KEEP_TEMP_FILES
+                  value: "{{ $.Values.debug.keepTempFiles }}"
+                  
+                # Job metadata
+                - name: JOB_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
+                - name: JOB_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                      
+                # Application-specific configuration
+                - name: SCAN_TARGET
+                  value: {{ $app.name | quote }}
+                - name: SCAN_TYPE
+                  value: "scheduled"
+              
+              # Resource limits
+              resources:
+                {{- toYaml $.Values.scanner.resources | nindent 16 }}
+              
+              # Volume mounts
+              volumeMounts:
+                # Scanner scripts
+                - name: scanner-scripts
+                  mountPath: /scripts
+                  readOnly: true
+                
+                # Application configuration
+                - name: applications-config
+                  mountPath: /config
+                  readOnly: true
+                
+                # Temporary working directory
+                - name: temp-storage
+                  mountPath: /tmp
+                  
+              # Security context
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: false  # Needed for temp files
+                capabilities:
+                  drop:
+                    - ALL
+          
+          volumes:
+            # Scanner scripts ConfigMap
+            - name: scanner-scripts
+              configMap:
+                name: {{ include "bd-selfscan.name" $ }}-scanner-scripts
+                defaultMode: 0755
+            
+            # Application configuration
+            - name: applications-config
+              configMap:
+                name: {{ $.Values.configMap.applications.name }}
+            
+            # Temporary storage for downloads and scanning
+            - name: temp-storage
+              emptyDir:
+                sizeLimit: {{ $.Values.scanner.resources.limits.ephemeralStorage | default "50Gi" }}
+
+{{- end }}
+{{- end }}
+{{- end }}

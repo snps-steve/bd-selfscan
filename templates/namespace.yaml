@@ -8,3 +8,5 @@ metadata:
     app.kubernetes.io/component: system
   annotations:
     description: "Black Duck SelfScan system namespace for multi-application container scanning"
+    bd-selfscan/managed-by: "helm"
+    bd-selfscan/purpose: "container-scanning"
