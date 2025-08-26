@@ -1,5 +1,5 @@
 # BD SelfScan Default Configuration Values
-# This file contains default configuration values for the BD SelfScan Helm chart
+# Updated for GitHub Container Registry
 
 # Global configuration
 global:
@@ -43,8 +43,10 @@ configMap:
 
 # Scanner configuration
 scanner:
-  image: "bd-selfscan:latest"
-  imagePullPolicy: "IfNotPresent"
+  # Use GitHub Container Registry image
+  # Replace 'your-github-username/your-repo-name' with your actual GitHub repository
+  image: "ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest"
+  imagePullPolicy: "Always"  # Always pull to get latest changes
   
   # Resource limits and requests
   resources:
@@ -72,11 +74,11 @@ scanner:
   
   # Container security context - more permissive for Black Duck scanning
   containerSecurityContext:
-    allowPrivilegeEscalation: true  # Changed: BD scanning may need this
-    readOnlyRootFilesystem: false   # Needed for temp files
-    runAsUser: 0                    # Added: ensure container runs as root
+    allowPrivilegeEscalation: true
+    readOnlyRootFilesystem: false
+    runAsUser: 0
     capabilities:
-      add:                          # Added: capabilities needed for scanning
+      add:
         - CHOWN
         - DAC_OVERRIDE
         - FOWNER
@@ -91,7 +93,7 @@ scanner:
   tolerations: []
   affinity: {}
   
-  # Docker socket access (if needed for container operations)
+  # Docker socket access
   dockerSocket:
     enabled: false
 
@@ -103,13 +105,14 @@ scanning:
   imageDownloadRetries: 3
   scanTimeout: 1800
 
-# Registry configuration
+# Registry configuration - GitHub Container Registry authentication
 registry:
-  imagePullSecrets: []
+  imagePullSecrets:
+    - name: ghcr-secret  # Optional: for private repositories
 
 # Debug configuration
 debug:
-  enabled: true                     # Changed: enable for troubleshooting
+  enabled: true
   logLevel: "INFO"
   keepTempFiles: false
 
