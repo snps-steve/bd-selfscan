@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Kubernetes](https://img.shields.io/badge/kubernetes-1.25%2B-blue.svg)](https://kubernetes.io/)
-[![Black Duck](https://img.shields.io/badge/black%20duck-2023.4%2B-green.svg)](https://www.blackduck.com/)
+[![Black Duck](https://img.shields.io/badge/black%20duck-2025.4.2-green.svg)](https://www.blackduck.com/)
 [![Helm](https://img.shields.io/badge/helm-3.x-blue.svg)](https://helm.sh/)
 
 A comprehensive Kubernetes-native solution for automated container vulnerability scanning using Black Duck SCA. BD SelfScan enables multi-application scanning across 50+ applications with both on-demand and automated deployment-triggered scanning capabilities.
