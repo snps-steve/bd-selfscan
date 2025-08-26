@@ -1,0 +1,89 @@
+# BD SelfScan Docker Build Exclusions
+
+# Git files
+.git/
+.gitignore
+.gitattributes
+
+# Documentation (not needed in container)
+README.md
+docs/
+*.md
+
+# Helm chart files (not needed in container)
+Chart.yaml
+values.yaml
+templates/
+
+# Test files
+tests/
+test_*
+*_test.go
+*.test
+
+# CI/CD files
+.github/
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
+.circleci/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
+tmp/
+
+# Docker files (avoid recursion)
+docker/
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Build artifacts
+build/
+dist/
+out/
+target/
+
+# Node.js (if any)
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Python (if any)  
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Configuration that shouldn't be in container
+configs/applications.yaml
+.env
+.env.*
+secrets/
+*.key
+*.pem
+*.crt
+
+# Logs
+*.log
+logs/
+
+# Backup files
+*.bak
+*.backup
+*.old

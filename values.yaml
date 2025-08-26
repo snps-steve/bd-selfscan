@@ -1,245 +1,49 @@
-# BD SelfScan Default Configuration Values
-# This file contains default values for bd-selfscan.
-# This is a YAML-formatted file.
-# Declare variables to be substituted into templates.
+# BD SelfScan values.yaml - Updated to use custom image
 
-# Global configuration
-global:
-  namespace: bd-selfscan-system
-  labels: {}
-  annotations: {}
-
-# Black Duck server configuration
-blackduck:
-  # These values should come from Kubernetes secrets
-  url: ""  # Will be loaded from secret
-  token: ""  # Will be loaded from secret
-  
-  # Secret containing Black Duck credentials
-  tokenSecretName: "blackduck-creds"
-  
-  # Trust SSL certificates (set to false for self-signed certs)
-  trustCert: true
-
-# Phase 1: On-demand scanning configuration
-onDemand:
-  enabled: true
-  
-# Phase 2: Automated scanning configuration  
-automated:
-  enabled: false  # Enable after Phase 1 validation
-  
-  # Controller configuration
-  controller:
-    # Container image for the controller
-    image: "python:3.11-alpine"
-    imagePullPolicy: IfNotPresent
-    
-    # Resource configuration
-    resources:
-      requests:
-        memory: "256Mi"
-        cpu: "100m"
-      limits:
-        memory: "512Mi" 
-        cpu: "500m"
-        ephemeralStorage: "1Gi"
-    
-    # Security context
-    securityContext:
-      runAsNonRoot: true
-      runAsUser: 65534
-      runAsGroup: 65534
-      fsGroup: 65534
-      
-    # Node selection
-    nodeSelector: {}
-    tolerations: []
-    affinity: {}
-    
-    # Network policy (optional)
-    networkPolicy:
-      enabled: false
-    
-    # Controller-specific settings
-    installDependencies: true
-    
-    # Health check configuration
-    healthCheck:
-      enabled: true
-      periodSeconds: 30
-      timeoutSeconds: 5
-      failureThreshold: 3
-      
-  # Webhook for deployment events (optional)
-  webhook:
-    enabled: false
-    port: 8443
-    
-  # Scheduled scanning
-  scheduled:
-    enabled: false
-
-# Scanner job configuration
 scanner:
-  # Container image for scanner jobs
-  image: "alpine:3.19"
-  imagePullPolicy: IfNotPresent
+  # Use your custom-built image instead of installing tools at runtime
+  image: "your-registry.com/bd-selfscan-scanner:latest"  # Update this!
+  imagePullPolicy: Always
   
-  # Resource configuration for scan jobs
+  # Resource requirements (can be lower since tools are pre-installed)
   resources:
     requests:
-      memory: "2Gi"
-      cpu: "500m"
+      memory: "2Gi"      # Reduced since no package installation
+      cpu: "500m"        # Reduced startup time
+      ephemeralStorage: "20Gi"
     limits:
-      memory: "8Gi"
-      cpu: "4"
+      memory: "8Gi"      # Still need memory for scanning
+      cpu: "4"           # Parallel processing
       ephemeralStorage: "50Gi"
   
   # Job configuration
   job:
-    # Job completion settings
     backoffLimit: 3
-    activeDeadlineSeconds: 7200  # 2 hours max
+    activeDeadlineSeconds: 5400  # 1.5 hours
     ttlSecondsAfterFinished: 86400  # 24 hours
-    
-    # Parallelism and concurrency
     parallelism: 1
     completions: 1
     
-    # Security context for scan jobs
+    # Security context - can run as non-root since tools are pre-installed
     securityContext:
-      runAsNonRoot: true
-      runAsUser: 65534
-      runAsGroup: 65534
-      fsGroup: 65534
+      runAsNonRoot: true   # Changed: tools already installed
+      runAsUser: 1000      # Changed: use scanner user
+      runAsGroup: 1000
+      fsGroup: 1000
       
-  # Node selection for scan jobs
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
+  # Container security context
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false  # Still need /tmp for scanning
+    capabilities:
+      drop:
+        - ALL
 
-# Application configurations
-# These will be loaded from the ConfigMap created from configs/applications.yaml
-applications: []
-
-# Container registry access (if using private registries)
+# Registry configuration (if using private registry)
 registry:
-  # Secret name containing registry credentials
-  secretName: ""
-  
-  # Image pull secrets
-  imagePullSecrets: []
+  imagePullSecrets:
+    - name: "your-registry-secret"  # Add if needed
 
-# RBAC configuration
-rbac:
-  # Whether to create RBAC resources
-  create: true
-  
-  # Service account configuration
-  serviceAccount:
-    create: true
-    name: ""
-    annotations: {}
-    
-# Monitoring and observability
-monitoring:
-  enabled: true
-  
-  # Prometheus ServiceMonitor
-  serviceMonitor:
-    enabled: false
-    namespace: ""
-    labels: {}
-    annotations: {}
-    interval: 30s
-    scrapeTimeout: 10s
-    
-  # Metrics configuration
-  metrics:
-    port: 8080
-    path: "/metrics"
-    
-# Debug and troubleshooting
-debug:
-  enabled: false
-  logLevel: "INFO"  # DEBUG, INFO, WARNING, ERROR
-  keepTempFiles: false
-  
-# Scanning configuration
-scanning:
-  # Timeouts
-  imageDownloadTimeout: 600
-  imageDownloadRetries: 3
-  scanTimeout: 1800
-  
-  # Policy configuration
-  projectTier: 3  # Default tier (1-4)
-  policyFailSeverities: "CRITICAL,BLOCKER"
-  
-  # Concurrency limits
-  maxConcurrentScans: 5
-  maxConcurrentDownloads: 3
-  
-  # Cleanup settings
-  cleanupInterval: 3600
-  keepSuccessfulJobs: 3
-  keepFailedJobs: 5
-
-# ConfigMap settings
-configMap:
-  # Application configuration
-  applications:
-    name: "bd-selfscan-applications"
-    
-  # Scanner scripts
-  scripts:
-    name: "bd-selfscan-scanner-scripts"
-
-# Network policies (optional security hardening)
-networkPolicy:
-  enabled: false
-  
-  # Ingress rules
-  ingress:
-    # Allow metrics scraping
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              name: monitoring
-      ports:
-        - protocol: TCP
-          port: 8080
-          
-  # Egress rules  
-  egress:
-    # Allow Kubernetes API
-    - to: []
-      ports:
-        - protocol: TCP
-          port: 443
-        - protocol: TCP
-          port: 6443
-    # Allow DNS
-    - to: []
-      ports:
-        - protocol: UDP
-          port: 53
-    # Allow Black Duck API
-    - to: []
-      ports:
-        - protocol: TCP
-          port: 443
-        - protocol: TCP
-          port: 80
-
-# Pod Security Standards (optional)
-podSecurityStandards:
-  enabled: false
-  enforce: "baseline"  # baseline, restricted
-  warn: "restricted"
-  audit: "restricted"
-
-# Additional labels and annotations for all resources
-commonLabels: {}
-commonAnnotations: {}
+# Global configuration
+global:
+  namespace: "bd-selfscan-system"
