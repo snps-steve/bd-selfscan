@@ -1,41 +1,75 @@
-# BD SelfScan values.yaml 
+# BD SelfScan Default Configuration Values
+# This file contains default configuration values for the BD SelfScan Helm chart
 
 # Global configuration
 global:
   namespace: "bd-selfscan-system"
 
+# Chart metadata
+nameOverride: ""
+fullnameOverride: ""
+
+# RBAC configuration
+rbac:
+  create: true
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+# Black Duck configuration
+blackduck:
+  tokenSecretName: "blackduck-creds"
+  trustCert: true
+
+# On-demand scanning configuration (Phase 1)
+onDemand:
+  enabled: true
+
+# Automated scanning configuration (Phase 2)
+automated:
+  enabled: false
+
+# Scan target (for on-demand scanning)
+scanTarget: ""
+
+# Application configuration
+applications: []
+
+# ConfigMap configuration
+configMap:
+  applications:
+    name: "bd-selfscan-applications"
+
 # Scanner configuration
 scanner:
-  # Use your GitHub Container Registry image 
-  image: "ghcr.io/snps-steve/bd-selfscan-scanner:v1.0.0"
-  imagePullPolicy: Always
+  image: "ubuntu:22.04"
+  imagePullPolicy: "IfNotPresent"
   
-  # Resource requirements
+  # Resource limits and requests
   resources:
     requests:
       memory: "2Gi"
       cpu: "500m"
-      ephemeralStorage: "20Gi"
+      ephemeral-storage: "10Gi"
     limits:
       memory: "8Gi"
       cpu: "4"
-      ephemeralStorage: "50Gi"
+      ephemeral-storage: "50Gi"
   
   # Job configuration
   job:
-    backoffLimit: 3
-    activeDeadlineSeconds: 5400  # 1.5 hours
+    backoffLimit: 2
+    activeDeadlineSeconds: 3600
     ttlSecondsAfterFinished: 86400  # 24 hours
     parallelism: 1
     completions: 1
-    
-    # Security context
     securityContext:
       runAsNonRoot: true
       runAsUser: 1000
       runAsGroup: 1000
       fsGroup: 1000
-      
+  
   # Container security context
   containerSecurityContext:
     allowPrivilegeEscalation: false
@@ -43,59 +77,81 @@ scanner:
     capabilities:
       drop:
         - ALL
+  
+  # Node selection
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  
+  # Docker socket access (if needed)
+  dockerSocket:
+    enabled: false
 
-# Black Duck secrets configuration 
-blackduck:
-  tokenSecretName: "blackduck-creds"
-  trustCert: true
-
-# Scanning configuration 
+# Scanning configuration
 scanning:
-  imageDownloadTimeout: 900
-  imageDownloadRetries: 5
-  scanTimeout: 3600
   projectTier: 3
   policyFailSeverities: "CRITICAL,BLOCKER"
-
-# ConfigMap settings 
-configMap:
-  applications:
-    name: "bd-selfscan-applications"
-  scripts:
-    name: "bd-selfscan-scanner-scripts"
-
-# RBAC 
-rbac:
-  create: true
-  clusterRole: true
-
-# Service Account 
-serviceAccount:
-  create: true
-  name: "bd-selfscan"
+  imageDownloadTimeout: 600
+  imageDownloadRetries: 3
+  scanTimeout: 1800
 
 # Registry configuration
 registry:
   imagePullSecrets: []
-
-# Phase configuration
-onDemand:
-  enabled: true
-
-automated:
-  enabled: false  # Phase 1 only
-
-# Monitoring settings
-monitoring:
-  enabled: false
-  serviceMonitor:
-    enabled: false
-    interval: "30s"
-    scrapeTimeout: "10s"
-    labels: {}
 
 # Debug configuration
 debug:
   enabled: false
   logLevel: "INFO"
   keepTempFiles: false
+
+# Monitoring configuration (Phase 2)
+monitoring:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    labels: {}
+    interval: "30s"
+    scrapeTimeout: "10s"
+
+# Controller configuration (Phase 2)
+controller:
+  enabled: false
+  image: "python:3.11-slim"
+  imagePullPolicy: "IfNotPresent"
+  replicas: 1
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  
+  service:
+    type: ClusterIP
+    port: 8080
+    targetPort: 8080
+  
+  metrics:
+    enabled: true
+    port: 8080
+    path: "/metrics"
+  
+  health:
+    enabled: true
+    port: 8081
+    path: "/health"
+
+# Scheduled scanning configuration (Phase 2)
+scheduled:
+  enabled: false
+  jobs: []
+
+# Network policy configuration
+networkPolicy:
+  enabled: false
+  ingress: []
+  egress: []
