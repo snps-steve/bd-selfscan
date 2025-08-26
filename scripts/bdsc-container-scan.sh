@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # BD SelfScan Core Container Scanner
 # Uses Black Duck Signature Scanner for Containers (BDSC)
 

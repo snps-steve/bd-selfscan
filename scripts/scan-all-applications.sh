@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # BD SelfScan - Scan All Applications Script
 # Scans all applications defined in the configuration file
 

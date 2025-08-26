@@ -43,9 +43,9 @@ configMap:
 
 # Scanner configuration
 scanner:
-  image: "ubuntu:22.04"
+  image: "bd-selfscan:latest"
   imagePullPolicy: "IfNotPresent"
-
+  
   # Resource limits and requests
   resources:
     requests:
@@ -56,34 +56,42 @@ scanner:
       memory: "8Gi"
       cpu: "4"
       ephemeral-storage: "50Gi"
-
+  
   # Job configuration
   job:
-    backoffLimit: 2
+    backoffLimit: 3
     activeDeadlineSeconds: 3600
     ttlSecondsAfterFinished: 86400  # 24 hours
     parallelism: 1
     completions: 1
+    # Pod-level security context - run as root for Black Duck operations
     securityContext:
-      runAsNonRoot: true
-      runAsUser: 1000
-      runAsGroup: 1000
-      fsGroup: 1000
-
-  # Container security context
+      runAsUser: 0
+      runAsGroup: 0
+      fsGroup: 0
+  
+  # Container security context - more permissive for Black Duck scanning
   containerSecurityContext:
-    allowPrivilegeEscalation: false
-    readOnlyRootFilesystem: false
+    allowPrivilegeEscalation: true  # Changed: BD scanning may need this
+    readOnlyRootFilesystem: false   # Needed for temp files
+    runAsUser: 0                    # Added: ensure container runs as root
     capabilities:
+      add:                          # Added: capabilities needed for scanning
+        - CHOWN
+        - DAC_OVERRIDE
+        - FOWNER
+        - SETGID
+        - SETUID
+        - SYS_ADMIN
       drop:
-        - ALL
-
+        - NET_RAW
+  
   # Node selection
   nodeSelector: {}
   tolerations: []
   affinity: {}
-
-  # Docker socket access (if needed)
+  
+  # Docker socket access (if needed for container operations)
   dockerSocket:
     enabled: false
 
@@ -101,7 +109,7 @@ registry:
 
 # Debug configuration
 debug:
-  enabled: false
+  enabled: true                     # Changed: enable for troubleshooting
   logLevel: "INFO"
   keepTempFiles: false
 
@@ -121,7 +129,6 @@ controller:
   image: "python:3.11-slim"
   imagePullPolicy: "IfNotPresent"
   replicas: 1
-
   resources:
     requests:
       memory: "256Mi"
@@ -129,17 +136,14 @@ controller:
     limits:
       memory: "512Mi"
       cpu: "500m"
-
   service:
     type: ClusterIP
     port: 8080
     targetPort: 8080
-
   metrics:
     enabled: true
     port: 8080
     path: "/metrics"
-
   health:
     enabled: true
     port: 8081

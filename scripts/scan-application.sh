@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # BD SelfScan - Single Application Scanner Wrapper
 # Scans a single application by name from the configuration
 

@@ -54,40 +54,37 @@ RUN mkdir -p /opt/detect \
     && chmod +x /opt/detect/detect.sh \
     && echo "Detect script cached at /opt/detect/detect.sh"
 
-# Create application directories
-RUN mkdir -p /app/scripts \
+# Create application directories FIRST
+RUN mkdir -p /scripts \
     && mkdir -p /tmp/bd-selfscan \
     && mkdir -p /config
 
-# Copy scanner scripts into the container
-COPY scripts/ /app/scripts/
-RUN chmod +x /app/scripts/*.sh
-
-# Create non-root user for security (but allow root when needed)
+# Create non-root user for security BEFORE setting ownership
 RUN useradd -m -s /bin/bash -u 1000 scanner \
     && usermod -aG root scanner
 
-# Set proper ownership
-RUN chown -R scanner:scanner /app \
+# Copy scanner scripts into the container (AFTER creating directories)
+COPY scripts/ /scripts/
+RUN chmod +x /scripts/*.sh
+
+# Set proper ownership AFTER user creation and file copying
+RUN chown -R scanner:scanner /scripts \
     && chown -R scanner:scanner /tmp/bd-selfscan \
-    && chmod -R 755 /app/scripts
+    && chmod -R 755 /scripts
 
 # Set working directory
-WORKDIR /app
+WORKDIR /tmp/bd-selfscan
 
 # Environment variables
-ENV PATH="/app/scripts:$PATH"
+ENV PATH="/scripts:$PATH"
 ENV JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
 
-# Health check (optional)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+# Remove invalid health check (this is a batch job, not a web service)
+# HEALTHCHECK removed
 
-# Default to running as scanner user, but allow override
-USER scanner
+# Default to running as root for Black Duck scanning operations
+# (Kubernetes can override this if needed)
+USER root
 
 # Default command
 CMD ["/bin/bash"]
-
-# Document exposed ports (if any)
-# EXPOSE 8080
