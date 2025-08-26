@@ -9,6 +9,10 @@ global:
 nameOverride: ""
 fullnameOverride: ""
 
+# Container registry configuration
+registry:
+  imagePullSecrets: []
+
 # RBAC configuration
 rbac:
   create: true
@@ -21,6 +25,8 @@ rbac:
 blackduck:
   tokenSecretName: "blackduck-creds"
   trustCert: true
+  connectionTimeout: 120
+  readTimeout: 300
 
 # On-demand scanning configuration (Phase 1)
 onDemand:
@@ -43,7 +49,7 @@ configMap:
 
 # Scanner configuration
 scanner:
-  image: "bd-selfscan:latest"
+  image: "ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest"  
   imagePullPolicy: "IfNotPresent"
   
   # Resource limits and requests
@@ -72,11 +78,11 @@ scanner:
   
   # Container security context - more permissive for Black Duck scanning
   containerSecurityContext:
-    allowPrivilegeEscalation: true  # Changed: BD scanning may need this
+    allowPrivilegeEscalation: true  # BD scanning may need this
     readOnlyRootFilesystem: false   # Needed for temp files
-    runAsUser: 0                    # Added: ensure container runs as root
+    runAsUser: 0                    # Ensure container runs as root
     capabilities:
-      add:                          # Added: capabilities needed for scanning
+      add:                          # Capabilities needed for scanning
         - CHOWN
         - DAC_OVERRIDE
         - FOWNER
@@ -102,15 +108,16 @@ scanning:
   imageDownloadTimeout: 600
   imageDownloadRetries: 3
   scanTimeout: 1800
-
-# Registry configuration
-registry:
-  imagePullSecrets: []
+  maxConcurrentScans: 3
+  maxConcurrentDownloads: 2
+  cleanupInterval: 7200
+  keepSuccessfulJobs: 5
+  keepFailedJobs: 10
 
 # Debug configuration
 debug:
-  enabled: true                     # Changed: enable for troubleshooting
-  logLevel: "INFO"
+  enabled: true                     # Good for initial troubleshooting
+  logLevel: "INFO"                  # DEBUG, INFO, WARNING, ERROR
   keepTempFiles: false
 
 # Monitoring configuration (Phase 2)
@@ -122,6 +129,8 @@ monitoring:
     labels: {}
     interval: "30s"
     scrapeTimeout: "10s"
+  prometheusRule:
+    enabled: false
 
 # Controller configuration (Phase 2)
 controller:
@@ -136,6 +145,9 @@ controller:
     limits:
       memory: "512Mi"
       cpu: "500m"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
   service:
     type: ClusterIP
     port: 8080
@@ -148,6 +160,12 @@ controller:
     enabled: true
     port: 8081
     path: "/health"
+    readiness:
+      initialDelaySeconds: 5
+      periodSeconds: 5
+    liveness:
+      initialDelaySeconds: 30
+      periodSeconds: 10
 
 # Scheduled scanning configuration (Phase 2)
 scheduled:
@@ -159,3 +177,19 @@ networkPolicy:
   enabled: false
   ingress: []
   egress: []
+
+# Resource quota management 
+resourceQuota:
+  enabled: false
+  hard:
+    limits.cpu: "16"
+    limits.memory: "64Gi"
+    limits.ephemeral-storage: "500Gi"
+    persistentvolumeclaims: "0"
+    requests.cpu: "8"
+    requests.memory: "32Gi"
+
+# Pod disruption budget (for Phase 2 controller)
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
