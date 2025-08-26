@@ -1,0 +1,202 @@
+{{- if .Values.onDemand.enabled }}
+# On-demand scan job - can be triggered via Helm install
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-{{ .Values.scanTarget | default "all" | lower | replace " " "-" }}-{{ now | date "20060102-150405" }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scanner
+    scan-type: on-demand
+    {{- if .Values.scanTarget }}
+    scan-target: {{ .Values.scanTarget | replace " " "-" | lower }}
+    {{- end }}
+  annotations:
+    {{- if .Values.scanTarget }}
+    bd-selfscan/target-application: {{ .Values.scanTarget | quote }}
+    {{- end }}
+    bd-selfscan/scan-type: "on-demand"
+    bd-selfscan/created-by: "helm"
+spec:
+  # Job configuration
+  backoffLimit: {{ .Values.scanner.job.backoffLimit }}
+  {{- if .Values.scanner.job.activeDeadlineSeconds }}
+  activeDeadlineSeconds: {{ .Values.scanner.job.activeDeadlineSeconds }}
+  {{- end }}
+  {{- if .Values.scanner.job.ttlSecondsAfterFinished }}
+  ttlSecondsAfterFinished: {{ .Values.scanner.job.ttlSecondsAfterFinished }}
+  {{- end }}
+  parallelism: {{ .Values.scanner.job.parallelism }}
+  completions: {{ .Values.scanner.job.completions }}
+  
+  template:
+    metadata:
+      labels:
+        {{- include "bd-selfscan.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: scanner
+        scan-type: on-demand
+      annotations:
+        {{- if .Values.scanTarget }}
+        bd-selfscan/target-application: {{ .Values.scanTarget | quote }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "bd-selfscan.serviceAccountName" . }}
+      restartPolicy: Never
+      
+      # Security context
+      {{- with .Values.scanner.job.securityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      # Node selection
+      {{- with .Values.scanner.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      {{- with .Values.scanner.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      {{- with .Values.scanner.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      # Image pull secrets
+      {{- with .Values.registry.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      containers:
+        - name: scanner
+          image: {{ .Values.scanner.image }}
+          imagePullPolicy: {{ .Values.scanner.imagePullPolicy }}
+          
+          # Command execution
+          {{- if .Values.scanTarget }}
+          command: ["/scripts/scan-application.sh"]
+          args: [{{ .Values.scanTarget | quote }}]
+          {{- else }}
+          command: ["/scripts/scan-all-applications.sh"]
+          args: ["--yes"]
+          {{- end }}
+          
+          # Environment variables
+          env:
+            # Black Duck configuration
+            - name: BD_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.blackduck.tokenSecretName }}
+                  key: url
+                  optional: false
+            - name: BD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.blackduck.tokenSecretName }}
+                  key: token
+                  optional: false
+            - name: TRUST_CERT
+              value: "{{ .Values.blackduck.trustCert }}"
+            
+            # Scanning configuration
+            - name: PROJECT_TIER
+              value: "{{ .Values.scanning.projectTier }}"
+            - name: POLICY_FAIL_SEVERITIES
+              value: {{ .Values.scanning.policyFailSeverities | quote }}
+            - name: IMAGE_DOWNLOAD_TIMEOUT
+              value: "{{ .Values.scanning.imageDownloadTimeout }}"
+            - name: IMAGE_DOWNLOAD_RETRIES
+              value: "{{ .Values.scanning.imageDownloadRetries }}"
+            - name: SCAN_TIMEOUT
+              value: "{{ .Values.scanning.scanTimeout }}"
+            
+            # Debug configuration
+            - name: DEBUG_ENABLED
+              value: "{{ .Values.debug.enabled }}"
+            - name: LOG_LEVEL
+              value: {{ .Values.debug.logLevel | quote }}
+            - name: KEEP_TEMP_FILES
+              value: "{{ .Values.debug.keepTempFiles }}"
+              
+            # Job metadata
+            - name: JOB_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: JOB_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+                  
+            # Specific scan target (if provided)
+            {{- if .Values.scanTarget }}
+            - name: SCAN_TARGET
+              value: {{ .Values.scanTarget | quote }}
+            {{- end }}
+          
+          # Resource limits
+          resources:
+            {{- toYaml .Values.scanner.resources | nindent 12 }}
+          
+          # Volume mounts
+          volumeMounts:
+            # Scanner scripts
+            - name: scanner-scripts
+              mountPath: /scripts
+              readOnly: true
+            
+            # Application configuration
+            - name: applications-config
+              mountPath: /config
+              readOnly: true
+            
+            # Temporary working directory
+            - name: temp-storage
+              mountPath: /tmp
+            
+            # Docker socket (if needed for image operations)
+            {{- if .Values.scanner.dockerSocket.enabled }}
+            - name: docker-socket
+              mountPath: /var/run/docker.sock
+            {{- end }}
+            
+          # Security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # Needed for temp files
+            capabilities:
+              drop:
+                - ALL
+      
+      volumes:
+        # Scanner scripts ConfigMap
+        - name: scanner-scripts
+          configMap:
+            name: {{ include "bd-selfscan.name" . }}-scanner-scripts
+            defaultMode: 0755
+        
+        # Application configuration
+        - name: applications-config
+          configMap:
+            name: {{ .Values.configMap.applications.name }}
+        
+        # Temporary storage for downloads and scanning
+        - name: temp-storage
+          emptyDir:
+            sizeLimit: {{ .Values.scanner.resources.limits.ephemeralStorage | default "50Gi" }}
+        
+        # Docker socket (if enabled)
+        {{- if .Values.scanner.dockerSocket.enabled }}
+        - name: docker-socket
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
+        {{- end }}
+
+{{- end }}

@@ -1,0 +1,136 @@
+# Applications configuration ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.configMap.applications.name }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: configuration
+  annotations:
+    description: "Application configuration mapping Kubernetes applications to Black Duck Project Groups"
+    bd-selfscan/config-type: "applications"
+data:
+  applications.yaml: |
+    {{- if .Values.applications }}
+    # Applications loaded from values.yaml
+    applications:
+    {{- toYaml .Values.applications | nindent 4 }}
+    {{- else }}
+    # Default applications configuration - loaded from configs/applications.yaml file
+    {{- (.Files.Get "configs/applications.yaml") | nindent 4 }}
+    {{- end }}
+
+---
+# Configuration validation script (optional helper)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-config-validator
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: configuration
+data:
+  validate-config.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    
+    echo "=== BD SelfScan Configuration Validator ==="
+    
+    CONFIG_FILE="/config/applications.yaml"
+    
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "ERROR: Configuration file not found: $CONFIG_FILE"
+        exit 1
+    fi
+    
+    # Check YAML syntax
+    echo "Checking YAML syntax..."
+    if ! yq eval '.' "$CONFIG_FILE" > /dev/null 2>&1; then
+        echo "ERROR: Invalid YAML syntax in $CONFIG_FILE"
+        exit 1
+    fi
+    
+    # Check required fields
+    echo "Validating required fields..."
+    
+    APPS_COUNT=$(yq eval '.applications | length' "$CONFIG_FILE")
+    echo "Found $APPS_COUNT applications"
+    
+    if [ "$APPS_COUNT" -eq 0 ]; then
+        echo "ERROR: No applications defined in configuration"
+        exit 1
+    fi
+    
+    # Check each application has required fields
+    for i in $(seq 0 $((APPS_COUNT - 1))); do
+        APP_NAME=$(yq eval ".applications[$i].name" "$CONFIG_FILE")
+        NAMESPACE=$(yq eval ".applications[$i].namespace" "$CONFIG_FILE")
+        LABEL_SELECTOR=$(yq eval ".applications[$i].labelSelector" "$CONFIG_FILE")
+        PROJECT_GROUP=$(yq eval ".applications[$i].projectGroup" "$CONFIG_FILE")
+        
+        echo "Validating application: $APP_NAME"
+        
+        if [ "$APP_NAME" = "null" ]; then
+            echo "ERROR: Application $i missing required field: name"
+            exit 1
+        fi
+        
+        if [ "$NAMESPACE" = "null" ]; then
+            echo "ERROR: Application '$APP_NAME' missing required field: namespace"
+            exit 1
+        fi
+        
+        if [ "$LABEL_SELECTOR" = "null" ]; then
+            echo "ERROR: Application '$APP_NAME' missing required field: labelSelector"
+            exit 1
+        fi
+        
+        if [ "$PROJECT_GROUP" = "null" ]; then
+            echo "ERROR: Application '$APP_NAME' missing required field: projectGroup"
+            exit 1
+        fi
+        
+        echo "✓ Application '$APP_NAME' validation passed"
+    done
+    
+    echo "=== Configuration validation completed successfully ==="
+    
+  test-label-selectors.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    
+    echo "=== Testing Label Selectors ==="
+    
+    CONFIG_FILE="/config/applications.yaml"
+    APPS_COUNT=$(yq eval '.applications | length' "$CONFIG_FILE")
+    
+    for i in $(seq 0 $((APPS_COUNT - 1))); do
+        APP_NAME=$(yq eval ".applications[$i].name" "$CONFIG_FILE")
+        NAMESPACE=$(yq eval ".applications[$i].namespace" "$CONFIG_FILE")
+        LABEL_SELECTOR=$(yq eval ".applications[$i].labelSelector" "$CONFIG_FILE")
+        
+        echo "Testing label selector for application: $APP_NAME"
+        echo "Namespace: $NAMESPACE"
+        echo "Label Selector: $LABEL_SELECTOR"
+        
+        # Test if namespace exists
+        if ! kubectl get namespace "$NAMESPACE" > /dev/null 2>&1; then
+            echo "WARNING: Namespace '$NAMESPACE' does not exist"
+            continue
+        fi
+        
+        # Test if label selector finds pods
+        POD_COUNT=$(kubectl get pods -n "$NAMESPACE" -l "$LABEL_SELECTOR" --no-headers 2>/dev/null | wc -l || echo "0")
+        
+        if [ "$POD_COUNT" -eq 0 ]; then
+            echo "WARNING: No pods found in namespace '$NAMESPACE' with labels '$LABEL_SELECTOR'"
+        else
+            echo "✓ Found $POD_COUNT pods matching label selector"
+        fi
+        
+        echo ""
+    done
+    
+    echo "=== Label selector testing completed ==="

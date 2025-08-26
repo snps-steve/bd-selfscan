@@ -1,0 +1,199 @@
+{{- if .Values.rbac.create }}
+# Service Account for BD SelfScan
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "bd-selfscan.serviceAccountName" . }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac
+  {{- with .Values.rbac.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+---
+# ClusterRole for multi-namespace scanning
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "bd-selfscan.name" . }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac
+rules:
+  # Core resources needed for container discovery and scanning
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+    
+  # Application workload discovery
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+    
+  # For adding scan annotations/labels (optional)
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["patch", "update"]
+    
+  # Batch job management for scan execution
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+    
+  # For Phase 2 automation - watching deployment events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+    
+  # ConfigMap access for application configuration
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+    
+  # Secret access for Black Duck credentials
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+    
+  # For creating scan jobs in the system namespace
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete"]
+    resourceNames: []
+    
+  # Service account token access
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    verbs: ["create"]
+
+---
+# ClusterRoleBinding to grant permissions cluster-wide
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "bd-selfscan.name" . }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "bd-selfscan.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "bd-selfscan.serviceAccountName" . }}
+    namespace: {{ .Values.global.namespace }}
+
+---
+# Additional Role for namespace-scoped operations in system namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-namespace
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac
+rules:
+  # Full access to jobs in the system namespace
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["*"]
+    
+  # Access to pods in the system namespace
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+    
+  # Access to pod logs for debugging
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+    
+  # ConfigMap and Secret management in system namespace
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+    
+  # Service management for controller
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+---
+# RoleBinding for namespace-scoped permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-namespace
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "bd-selfscan.name" . }}-namespace
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "bd-selfscan.serviceAccountName" . }}
+    namespace: {{ .Values.global.namespace }}
+
+{{- if .Values.automated.enabled }}
+---
+# Additional ClusterRole for Phase 2 controller automation
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-controller
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac-controller
+rules:
+  # Watch deployment events across all namespaces
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["watch"]
+    
+  # Access deployment status and metadata
+  - apiGroups: ["apps"]
+    resources: ["deployments/status"]
+    verbs: ["get", "list"]
+    
+  # Create scan jobs when deployments are detected
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create"]
+    
+  # Monitor job completion and status
+  - apiGroups: ["batch"]
+    resources: ["jobs/status"]
+    verbs: ["get", "list", "watch"]
+
+---
+# ClusterRoleBinding for controller automation
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-controller
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "bd-selfscan.name" . }}-controller
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "bd-selfscan.serviceAccountName" . }}
+    namespace: {{ .Values.global.namespace }}
+{{- end }}
+
+{{- end }}

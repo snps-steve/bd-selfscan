@@ -1,0 +1,137 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "bd-selfscan.name" . }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      {{- include "bd-selfscan.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: metrics
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+    scrapeTimeout: 10s
+    honorLabels: true
+  - port: metrics
+    interval: 30s 
+    path: /health
+    scrapeTimeout: 5s
+    honorLabels: true
+---
+{{- if .Values.automated.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-metrics
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+spec:
+  type: ClusterIP
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: metrics
+    protocol: TCP
+  - name: health
+    port: 8081
+    targetPort: health
+    protocol: TCP
+  selector:
+    {{- include "bd-selfscan.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+{{- end }}
+---
+{{- if .Values.automated.enabled }}
+# Additional ServiceMonitor for scan job metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-jobs
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: job-monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "bd-selfscan.name" . }}
+      scan-type: automated
+  endpoints:
+  - port: metrics
+    interval: 60s
+    path: /metrics
+    scrapeTimeout: 15s
+    honorLabels: true
+  namespaceSelector:
+    matchNames:
+    - {{ .Values.global.namespace }}
+{{- end }}
+---
+# PrometheusRule for BD SelfScan alerting
+{{- if .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "bd-selfscan.name" . }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alerting
+spec:
+  groups:
+  - name: bd-selfscan.rules
+    interval: 30s
+    rules:
+    # Scan job failure alert
+    - alert: BDSelfScanJobFailed
+      expr: increase(bd_selfscan_job_failures_total[5m]) > 0
+      for: 0m
+      labels:
+        severity: warning
+        component: bd-selfscan
+      annotations:
+        summary: "BD SelfScan job failed"
+        description: "BD SelfScan job {{ $labels.job_name }} failed in namespace {{ $labels.namespace }}"
+    
+    # High scan duration alert
+    - alert: BDSelfScanJobTooSlow
+      expr: bd_selfscan_job_duration_seconds > {{ .Values.monitoring.alerts.slowScanThreshold | default "3600" }}
+      for: 5m
+      labels:
+        severity: warning
+        component: bd-selfscan
+      annotations:
+        summary: "BD SelfScan job taking too long"
+        description: "BD SelfScan job {{ $labels.job_name }} has been running for {{ $value }}s"
+    
+    # Controller not responding
+    - alert: BDSelfScanControllerDown
+      expr: up{job="bd-selfscan-metrics"} == 0
+      for: 2m
+      labels:
+        severity: critical
+        component: bd-selfscan
+      annotations:
+        summary: "BD SelfScan controller is down"
+        description: "BD SelfScan controller has not been responding for more than 2 minutes"
+    
+    # Too many policy violations
+    - alert: BDSelfScanHighPolicyViolations
+      expr: increase(bd_selfscan_policy_violations_total[1h]) > {{ .Values.monitoring.alerts.policyViolationThreshold | default "10" }}
+      for: 0m
+      labels:
+        severity: warning
+        component: bd-selfscan
+      annotations:
+        summary: "High number of BD SelfScan policy violations"
+        description: "{{ $value }} policy violations detected in the last hour"
+{{- end }}
+{{- end }}

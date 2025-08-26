@@ -1,0 +1,47 @@
+apiVersion: v2
+name: bd-selfscan
+description: A Helm chart for Black Duck SelfScan - Multi-application container vulnerability scanning
+type: application
+
+# Chart version - increment this when you make changes to the chart
+version: 0.1.0
+
+# Application version - this is the version of BD SelfScan itself
+appVersion: "1.0.0"
+
+# Chart keywords for discovery
+keywords:
+  - blackduck
+  - security
+  - container-scanning
+  - vulnerability-scanning
+  - devsecops
+  - kubernetes
+  - bdsc
+
+# Chart maintainers
+maintainers:
+  - name: Your Organization
+    email: security@your-org.com
+    url: https://your-org.com
+
+# Chart home and source URLs  
+home: https://github.com/your-org/bd-selfscan
+sources:
+  - https://github.com/your-org/bd-selfscan
+
+# Minimum Kubernetes version required
+kubeVersion: ">=1.25.0-0"
+
+# Dependencies (none required for this chart)
+dependencies: []
+
+# Chart annotations
+annotations:
+  category: Security
+  licenses: MIT
+  images: |
+    - name: alpine
+      image: docker.io/alpine:3.19
+    - name: python  
+      image: docker.io/python:3.11-alpine

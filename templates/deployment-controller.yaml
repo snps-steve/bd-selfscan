@@ -1,0 +1,306 @@
+{{- if .Values.automated.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-controller
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  replicas: 1  # Single replica for Phase 2 controller
+  strategy:
+    type: Recreate  # Ensure only one controller runs at a time
+  selector:
+    matchLabels:
+      {{- include "bd-selfscan.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        {{- include "bd-selfscan.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: controller
+      annotations:
+        # Force pod restart when configuration changes
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-apps.yaml") . | sha256sum }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ include "bd-selfscan.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534  # nobody user
+        runAsGroup: 65534
+        fsGroup: 65534
+      containers:
+        - name: controller
+          image: {{ .Values.automated.controller.image }}
+          imagePullPolicy: {{ .Values.automated.controller.imagePullPolicy | default "IfNotPresent" }}
+          command: ["python", "/app/controller.py"]
+          ports:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+          env:
+            # Controller configuration
+            - name: NAMESPACE
+              value: {{ .Values.global.namespace }}
+            - name: DEBUG
+              value: "{{ .Values.debug.enabled }}"
+            - name: LOG_LEVEL
+              value: "{{ .Values.debug.logLevel | default "INFO" }}"
+            
+            # Black Duck configuration (for creating scan jobs)
+            - name: BD_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.blackduck.tokenSecretName }}
+                  key: url
+                  optional: false
+            - name: BD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.blackduck.tokenSecretName }}
+                  key: token
+                  optional: false
+            
+            # Kubernetes client configuration
+            - name: KUBERNETES_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: KUBERNETES_SERVICE_ACCOUNT
+              value: {{ include "bd-selfscan.serviceAccountName" . }}
+            
+            # Controller behavior settings
+            - name: SCAN_JOB_TIMEOUT
+              value: "{{ .Values.automated.controller.scanJobTimeout | default "3600" }}"
+            - name: MAX_CONCURRENT_SCANS
+              value: "{{ .Values.automated.controller.maxConcurrentScans | default "5" }}"
+            - name: CLEANUP_INTERVAL
+              value: "{{ .Values.automated.controller.cleanupInterval | default "3600" }}"
+            - name: CONFIG_RELOAD_INTERVAL
+              value: "{{ .Values.automated.controller.configReloadInterval | default "600" }}"
+            
+          volumeMounts:
+            - name: controller-script
+              mountPath: /app
+              readOnly: true
+            - name: applications-config
+              mountPath: /config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          
+          resources:
+            {{- toYaml .Values.automated.controller.resources | nindent 12 }}
+          
+          # Health and readiness probes
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+            successThreshold: 1
+          
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+          
+          # Security context for container
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      
+      # Pod-level configurations
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 60
+      
+      # Node selection and tolerations
+      {{- with .Values.automated.controller.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      {{- with .Values.automated.controller.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      {{- with .Values.automated.controller.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      volumes:
+        # Controller Python script
+        - name: controller-script
+          configMap:
+            name: {{ include "bd-selfscan.name" . }}-controller
+            defaultMode: 0555
+        
+        # Application configuration
+        - name: applications-config
+          configMap:
+            name: bd-selfscan-applications
+        
+        # Temporary directory (writable)
+        - name: tmp
+          emptyDir:
+            sizeLimit: 100Mi
+
+---
+# ConfigMap containing the controller Python script
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-controller
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+data:
+  controller.py: |
+    {{- (.Files.Get "scripts/controller.py") | nindent 4 }}
+  
+  requirements.txt: |
+    kubernetes==28.1.0
+    PyYAML==6.0.1
+    prometheus-client==0.19.0
+    asyncio-throttle==1.0.2
+    
+  install-deps.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    
+    echo "Installing Python dependencies..."
+    pip3 install --no-cache-dir --user -r /app/requirements.txt
+    
+    echo "Dependencies installed successfully"
+
+---
+# Init container to install Python dependencies
+{{- if .Values.automated.controller.installDependencies }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-controller-init
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller-init
+data:
+  install.sh: |
+    #!/bin/sh
+    set -euo pipefail
+    
+    echo "Installing required system packages..."
+    apk add --no-cache python3 py3-pip python3-dev build-base
+    
+    echo "Installing Python dependencies..."
+    pip3 install --no-cache-dir kubernetes PyYAML prometheus-client
+    
+    echo "Dependencies installation completed"
+{{- end }}
+
+---
+# Service for controller metrics and health checks
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-controller
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: metrics
+      protocol: TCP
+    - name: health
+      port: 8081
+      targetPort: health
+      protocol: TCP
+  selector:
+    {{- include "bd-selfscan.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+
+---
+# NetworkPolicy for controller (optional, if network policies are enabled)
+{{- if .Values.automated.controller.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-controller
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "bd-selfscan.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: controller
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow metrics scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: {{ .Values.monitoring.namespace | default "monitoring" }}
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow health checks
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 8081
+  egress:
+    # Allow Kubernetes API access
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    # Allow DNS
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow Black Duck API access
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+{{- end }}
+
+{{- end }}

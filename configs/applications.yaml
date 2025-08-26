@@ -1,0 +1,60 @@
+# BD SelfScan Application Configuration
+# Standalone configuration file for multi-application container scanning
+# This file maps Kubernetes applications to Black Duck Project Groups
+
+applications:
+  # Test case - Your BD SCA deployment
+  - name: "Black Duck SCA"
+    namespace: "bd"
+    labelSelector: "app=blackduck"
+    projectGroup: "Black Duck SCA"
+    projectTier: 2
+    scanOnDeploy: true
+    scanSchedule: "0 2 * * 0"  # Weekly Sunday 2AM (Phase 2)
+    description: "Black Duck SCA platform components for vulnerability scanning"
+    
+# Configuration Schema Documentation
+# 
+# Required Fields:
+#   name: Human-readable application name (used in Black Duck Project names)
+#   namespace: Kubernetes namespace where the application is deployed
+#   labelSelector: Kubernetes label selector to find pods (supports multiple labels)
+#   projectGroup: Black Duck Project Group name (will be created if it doesn't exist)
+#   projectTier: Priority tier for scanning policies (1=Critical, 2=High, 3=Medium, 4=Low)
+#
+# Optional Fields:
+#   scanOnDeploy: Enable automatic scanning when deployments occur (Phase 2)
+#   scanSchedule: Cron expression for scheduled scans (Phase 2 only)
+#   description: Human-readable description for documentation purposes
+#
+# Label Selector Syntax Examples:
+#   Single label:     "app=myapp"
+#   Multiple labels:  "app=myapp,version=v1.2.0" (AND condition)
+#   Standard k8s:     "app.kubernetes.io/part-of=myapp"
+#   Complex:          "tier=web,environment=production,team=backend"
+#
+# Project Tiers determine scan priority and policy enforcement:
+#   Tier 1 (Critical): Financial systems, security components, core infrastructure
+#     - Strictest policies, immediate scan on deploy, high severity blocking
+#   Tier 2 (High): Customer-facing applications, important business functions
+#     - Strict policies, scan on deploy, medium+ severity blocking  
+#   Tier 3 (Medium): Standard applications, internal services (DEFAULT)
+#     - Standard policies, scheduled scanning, critical severity blocking
+#   Tier 4 (Low): Development tools, non-critical internal utilities
+#     - Relaxed policies, scheduled scanning only, blocker severity only
+#
+# Scan Scheduling (Phase 2):
+#   Cron format: "minute hour day_of_month month day_of_week"
+#   Examples:
+#     "0 2 * * 0"   - Every Sunday at 2:00 AM
+#     "0 3 * * 1"   - Every Monday at 3:00 AM  
+#     "30 1 * * *"  - Every day at 1:30 AM
+#     "0 */6 * * *" - Every 6 hours
+#
+# Adding New Applications:
+# 1. Identify the Kubernetes namespace
+# 2. Determine appropriate label selector using: kubectl get pods -n <namespace> --show-labels
+# 3. Choose or create appropriate Project Group name
+# 4. Set project tier based on application criticality
+# 5. Decide on scanning triggers (on-deploy, scheduled, or both)
+# 6. Test with single application before adding to production configuration
