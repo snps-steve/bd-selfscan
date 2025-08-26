@@ -45,7 +45,7 @@ configMap:
 scanner:
   image: "ubuntu:22.04"
   imagePullPolicy: "IfNotPresent"
-  
+
   # Resource limits and requests
   resources:
     requests:
@@ -56,7 +56,7 @@ scanner:
       memory: "8Gi"
       cpu: "4"
       ephemeral-storage: "50Gi"
-  
+
   # Job configuration
   job:
     backoffLimit: 2
@@ -69,7 +69,7 @@ scanner:
       runAsUser: 1000
       runAsGroup: 1000
       fsGroup: 1000
-  
+
   # Container security context
   containerSecurityContext:
     allowPrivilegeEscalation: false
@@ -77,12 +77,12 @@ scanner:
     capabilities:
       drop:
         - ALL
-  
+
   # Node selection
   nodeSelector: {}
   tolerations: []
   affinity: {}
-  
+
   # Docker socket access (if needed)
   dockerSocket:
     enabled: false
@@ -121,7 +121,7 @@ controller:
   image: "python:3.11-slim"
   imagePullPolicy: "IfNotPresent"
   replicas: 1
-  
+
   resources:
     requests:
       memory: "256Mi"
@@ -129,17 +129,17 @@ controller:
     limits:
       memory: "512Mi"
       cpu: "500m"
-  
+
   service:
     type: ClusterIP
     port: 8080
     targetPort: 8080
-  
+
   metrics:
     enabled: true
     port: 8080
     path: "/metrics"
-  
+
   health:
     enabled: true
     port: 8081
