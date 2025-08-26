@@ -1,19 +1,24 @@
-# BD SelfScan values.yaml - Updated to use custom image
+# BD SelfScan values.yaml 
 
+# Global configuration
+global:
+  namespace: "bd-selfscan-system"
+
+# Scanner configuration
 scanner:
-  # Use your custom-built image instead of installing tools at runtime
-  image: "your-registry.com/bd-selfscan-scanner:latest"  # Update this!
+  # Use your GitHub Container Registry image 
+  image: "ghcr.io/snps-steve/bd-selfscan-scanner:v1.0.0"
   imagePullPolicy: Always
   
-  # Resource requirements (can be lower since tools are pre-installed)
+  # Resource requirements
   resources:
     requests:
-      memory: "2Gi"      # Reduced since no package installation
-      cpu: "500m"        # Reduced startup time
+      memory: "2Gi"
+      cpu: "500m"
       ephemeralStorage: "20Gi"
     limits:
-      memory: "8Gi"      # Still need memory for scanning
-      cpu: "4"           # Parallel processing
+      memory: "8Gi"
+      cpu: "4"
       ephemeralStorage: "50Gi"
   
   # Job configuration
@@ -24,26 +29,73 @@ scanner:
     parallelism: 1
     completions: 1
     
-    # Security context - can run as non-root since tools are pre-installed
+    # Security context
     securityContext:
-      runAsNonRoot: true   # Changed: tools already installed
-      runAsUser: 1000      # Changed: use scanner user
+      runAsNonRoot: true
+      runAsUser: 1000
       runAsGroup: 1000
       fsGroup: 1000
       
   # Container security context
   containerSecurityContext:
     allowPrivilegeEscalation: false
-    readOnlyRootFilesystem: false  # Still need /tmp for scanning
+    readOnlyRootFilesystem: false
     capabilities:
       drop:
         - ALL
 
-# Registry configuration (if using private registry)
-registry:
-  imagePullSecrets:
-    - name: "your-registry-secret"  # Add if needed
+# Black Duck secrets configuration 
+blackduck:
+  tokenSecretName: "blackduck-creds"
+  trustCert: true
 
-# Global configuration
-global:
-  namespace: "bd-selfscan-system"
+# Scanning configuration 
+scanning:
+  imageDownloadTimeout: 900
+  imageDownloadRetries: 5
+  scanTimeout: 3600
+  projectTier: 3
+  policyFailSeverities: "CRITICAL,BLOCKER"
+
+# ConfigMap settings 
+configMap:
+  applications:
+    name: "bd-selfscan-applications"
+  scripts:
+    name: "bd-selfscan-scanner-scripts"
+
+# RBAC 
+rbac:
+  create: true
+  clusterRole: true
+
+# Service Account 
+serviceAccount:
+  create: true
+  name: "bd-selfscan"
+
+# Registry configuration
+registry:
+  imagePullSecrets: []
+
+# Phase configuration
+onDemand:
+  enabled: true
+
+automated:
+  enabled: false  # Phase 1 only
+
+# Monitoring settings
+monitoring:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    interval: "30s"
+    scrapeTimeout: "10s"
+    labels: {}
+
+# Debug configuration
+debug:
+  enabled: false
+  logLevel: "INFO"
+  keepTempFiles: false
