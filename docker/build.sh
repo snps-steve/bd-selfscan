@@ -4,9 +4,10 @@
 set -euo pipefail
 
 # Configuration
-REGISTRY="${REGISTRY:-localhost:5000}"  # Default to local registry
+REGISTRY="${REGISTRY:-ghcr.io}"  # Default to GitHub Container Registry
 IMAGE_NAME="${IMAGE_NAME:-bd-selfscan-scanner}"
 VERSION="${VERSION:-latest}"
+GITHUB_OWNER="${GITHUB_OWNER:-your-username}"  # Replace with your GitHub username/org
 BUILD_CONTEXT="../"  # Build from parent directory to access scripts/
 
 # Colors for output
@@ -29,30 +30,32 @@ Usage: $0 [OPTIONS]
 Build BD SelfScan scanner container image.
 
 Options:
-    -r, --registry REGISTRY    Container registry (default: localhost:5000)
+    -r, --registry REGISTRY    Container registry (default: ghcr.io)
     -n, --name NAME            Image name (default: bd-selfscan-scanner)  
     -v, --version VERSION      Image version (default: latest)
+    -o, --owner OWNER          GitHub owner/org (required for ghcr.io)
     -p, --push                 Push image after building
     --no-cache                 Build without using cache
     -h, --help                 Show this help message
 
 Examples:
-    # Build locally
-    $0
+    # Build for GitHub Container Registry
+    $0 --owner your-username
     
-    # Build and push to registry
-    $0 --registry your-registry.com --push
+    # Build and push to GitHub Container Registry
+    $0 --owner your-username --push
     
-    # Build specific version
-    $0 --version v1.0.0 --push
+    # Build specific version for GitHub
+    $0 --owner your-username --version v1.0.0 --push
     
     # Build without cache
-    $0 --no-cache
+    $0 --owner your-username --no-cache
 
 Environment Variables:
-    REGISTRY    - Container registry (default: localhost:5000)
-    IMAGE_NAME  - Image name (default: bd-selfscan-scanner)
-    VERSION     - Image version (default: latest)
+    REGISTRY      - Container registry (default: ghcr.io)
+    IMAGE_NAME    - Image name (default: bd-selfscan-scanner)
+    VERSION       - Image version (default: latest)
+    GITHUB_OWNER  - GitHub username or organization name
 
 EOF
 }
@@ -73,6 +76,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -v|--version)
             VERSION="$2"
+            shift 2
+            ;;
+        -o|--owner)
+            GITHUB_OWNER="$2"
             shift 2
             ;;
         -p|--push)
@@ -96,12 +103,24 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Construct full image tag
-FULL_IMAGE_TAG="${REGISTRY}/${IMAGE_NAME}:${VERSION}"
+if [ "$REGISTRY" = "ghcr.io" ]; then
+    if [ -z "$GITHUB_OWNER" ]; then
+        log_error "GitHub owner/organization name is required when using ghcr.io"
+        log_info "Set with: --owner your-username or export GITHUB_OWNER=your-username"
+        exit 1
+    fi
+    FULL_IMAGE_TAG="${REGISTRY}/${GITHUB_OWNER}/${IMAGE_NAME}:${VERSION}"
+else
+    FULL_IMAGE_TAG="${REGISTRY}/${IMAGE_NAME}:${VERSION}"
+fi
 
 log_info "Building BD SelfScan Scanner container image"
 log_info "Registry: $REGISTRY"
 log_info "Image Name: $IMAGE_NAME" 
 log_info "Version: $VERSION"
+if [ "$REGISTRY" = "ghcr.io" ]; then
+    log_info "GitHub Owner: $GITHUB_OWNER"
+fi
 log_info "Full Tag: $FULL_IMAGE_TAG"
 
 # Verify build context exists
@@ -143,7 +162,11 @@ fi
 
 # Tag as latest if not already latest
 if [ "$VERSION" != "latest" ]; then
-    LATEST_TAG="${REGISTRY}/${IMAGE_NAME}:latest"
+    if [ "$REGISTRY" = "ghcr.io" ]; then
+        LATEST_TAG="${REGISTRY}/${GITHUB_OWNER}/${IMAGE_NAME}:latest"
+    else
+        LATEST_TAG="${REGISTRY}/${IMAGE_NAME}:latest"
+    fi
     docker tag "$FULL_IMAGE_TAG" "$LATEST_TAG"
     log_info "Tagged as latest: $LATEST_TAG"
 fi
@@ -160,7 +183,11 @@ if [ "$PUSH_IMAGE" = true ]; then
         log_success "Image pushed successfully: $FULL_IMAGE_TAG"
         
         if [ "$VERSION" != "latest" ]; then
-            docker push "${REGISTRY}/${IMAGE_NAME}:latest"
+            if [ "$REGISTRY" = "ghcr.io" ]; then
+                docker push "${REGISTRY}/${GITHUB_OWNER}/${IMAGE_NAME}:latest"
+            else
+                docker push "${REGISTRY}/${IMAGE_NAME}:latest"
+            fi
             log_success "Latest tag pushed successfully"
         fi
     else
