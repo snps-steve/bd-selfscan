@@ -453,14 +453,22 @@ extract_project_info() {
     local project_name
     if [[ -n "$repository" ]]; then
         # Remove registry prefix if present
-        project_name=$(echo "$repository" | sed 's|^[^/]*/||' | tr '/' '-')
+        local temp_repo="$repository"
+        if [[ "$temp_repo" == */* ]]; then
+            project_name="${temp_repo#*/}"  # Remove everything up to first slash
+        else
+            project_name="$temp_repo"
+        fi
+        project_name="${project_name//\//-}"  # Convert remaining slashes to hyphens
     else
         project_name=$(echo "$app_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
     fi
 
     # Clean up project name (Black Duck project naming rules)
-    project_name=$(echo "$project_name" | sed 's/[^a-zA-Z0-9._-]/-/g' | sed 's/^-\+\|-\+$//g')
-    
+    project_name="${project_name//[^a-zA-Z0-9._-]/-}"  # Replace invalid chars with hyphens
+    project_name="${project_name#"${project_name%%[!-]*}"}"  # Remove leading hyphens
+    project_name="${project_name%"${project_name##*[!-]}"}"  # Remove trailing hyphens   
+
     # Ensure project name is not empty
     if [[ -z "$project_name" ]]; then
         project_name="unknown-project"
@@ -468,8 +476,10 @@ extract_project_info() {
 
     # Clean up tag for version name
     local version_name
-    version_name=$(echo "$tag" | sed 's/[^a-zA-Z0-9._-]/-/g' | sed 's/^-\+\|-\+$//g')
-    
+    version_name="${tag//[^a-zA-Z0-9._-]/-}"  # Replace invalid chars with hyphens
+    version_name="${version_name#"${version_name%%[!-]*}"}"  # Remove leading hyphens  
+    version_name="${version_name%"${version_name##*[!-]}"}"  # Remove trailing hyphens
+        
     # Make version more specific if it's generic
     if [[ "$version_name" =~ ^(latest|main|master|dev|develop)$ ]]; then
         version_name="${version_name}-$(date +%Y%m%d)"

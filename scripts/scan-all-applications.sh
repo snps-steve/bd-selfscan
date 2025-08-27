@@ -380,7 +380,7 @@ scan_single_application() {
 
     # Run the scan with proper error handling and logging
     local log_prefix="[$app_num/$total]"
-    if "$scan_script" "$app_name" 2>&1 | sed "s/^/$log_prefix /"; then
+    if "$scan_script" "$app_name" 2>&1 | while IFS= read -r line; do echo "$log_prefix $line"; done; then
         end_time=$(date +%s)
         duration=$((end_time - start_time))
         log_success "[$app_num/$total] ✓ $app_name completed (${duration}s)"
