@@ -22,8 +22,8 @@ keywords:
 
 # Chart maintainers
 maintainers:
-  - name: Steve Kemp
-    email: steve.kemp@synopsys.com
+  - name: Steve Smith
+    email: smiths@blackduck.com
 
 # Chart home and source URLs  
 home: https://github.com/snps-steve/bd-selfscan
