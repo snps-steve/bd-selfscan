@@ -1,4 +1,4 @@
-# Black Duck SCA SelfScan for Kubernetes
+# Black Duck SelfScan for Kubernetes
 
 A solution for integrating Black Duck SCA's Detect into Kubernetes clusters to scan containerized applications using Black Duck Secure Container (BDSC).
 
