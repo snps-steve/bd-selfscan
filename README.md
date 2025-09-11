@@ -8,7 +8,7 @@ Note: requires a licensed Registration ID, Black Duck Binary Analysis, Black Duc
 
 BD SelfScan enables organizations to secure their container deployments by:
 - **Discovering container images** from running pods across all namespaces
-- **Performing BDSC-based vulnerability scanning** with layer-by-layer analysis
+- **Performing BDSC-based scanning** with layer-by-layer vulnerability and OSS license analysis
 - **Organizing results** in Black Duck using a microservices-friendly project structure
 - **Automating scans** through Kubernetes Jobs and event-driven triggers
 
