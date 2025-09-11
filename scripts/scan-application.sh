@@ -324,6 +324,12 @@ execute_scan() {
     export BD_TOKEN="${BD_TOKEN:-}"
     export TRUST_CERT="${TRUST_CERT:-true}"
     export DEBUG_ENABLED="${DEBUG_ENABLED:-false}"
+    
+    # CRITICAL: Export the application name for proper project naming
+    export APPLICATION_NAME="$app_name"
+    
+    # ADDED: Export the application name for proper project naming
+    export APPLICATION_NAME="$app_name"
 
     # Validate required environment variables
     if [[ -z "$BD_URL" ]] || [[ -z "$BD_TOKEN" ]]; then
