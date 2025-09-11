@@ -1,164 +1,232 @@
 # BD SelfScan Installation Guide
 
-This guide provides comprehensive installation instructions for BD SelfScan container vulnerability scanning in Kubernetes environments.
+This guide provides step-by-step instructions for installing and configuring BD SelfScan for Kubernetes container vulnerability scanning.
 
-## 📋 Prerequisites
+## 📋 Table of Contents
 
-### System Requirements
-- **Kubernetes Cluster**: Version 1.25+ with cluster-admin access
-- **Helm**: Version 3.x installed and configured
-- **Black Duck SCA**: Running instance with API access
-- **Resources**: Sufficient cluster resources for container scanning workloads
+- [Prerequisites](#prerequisites)
+- [Quick Start - New Installation](#quick-start---new-installation)
+- [Phase 1: On-Demand Scanning](#phase-1-on-demand-scanning)
+- [Phase 2: Automated Scanning](#phase-2-automated-scanning)
+- [Advanced Configuration](#advanced-configuration)
+- [Validation and Testing](#validation-and-testing)
+- [Monitoring Setup](#monitoring-setup)
+- [Upgrade Process](#upgrade-process)
+- [Uninstallation](#uninstallation)
 
-### Minimum Resource Requirements
-- **CPU**: 4 cores available for scan jobs
-- **Memory**: 8Gi available for scan jobs  
-- **Storage**: 50Gi ephemeral storage per scan job
-- **Network**: Outbound HTTPS access to Black Duck server and container registries
+## Prerequisites
 
-### Required Access
-- **Cluster Admin**: Required for cluster-wide RBAC configuration
-- **Black Duck Admin**: API token with project creation permissions
-- **Container Registries**: Access to scan container images (private registry credentials if needed)
+### Kubernetes Environment
 
-## 🛠️ Installation Steps
+| Requirement | Minimum Version | Recommended | Notes |
+|-------------|----------------|-------------|-------|
+| **Kubernetes** | 1.25.0 | 1.27+ | Requires Job TTL and ephemeral storage support |
+| **Helm** | 3.8.0 | 3.12+ | Used for chart deployment and upgrades |
+| **kubectl** | 1.25.0 | 1.27+ | Must match cluster version |
 
-### Step 1: Prepare Black Duck Credentials
+### Resource Requirements
 
-Create a Kubernetes secret containing your Black Duck server URL and API token:
+#### Per Scan Job
+- **CPU**: 1-8 cores (4 cores recommended)
+- **Memory**: 4-16Gi (8Gi recommended)
+- **Ephemeral Storage**: 20-100Gi (depends on container image sizes)
+- **Network**: High bandwidth for container image downloads
+
+#### Controller (Phase 2)
+- **CPU**: 100m-500m (200m recommended)
+- **Memory**: 256Mi-1Gi (512Mi recommended)
+- **Storage**: Minimal (configuration only)
+
+### Black Duck SCA Requirements
+
+| Requirement | Details |
+|-------------|---------|
+| **Version** | Black Duck 2023.4 or later |
+| **API Token** | Valid token with project creation permissions |
+| **Network Access** | HTTPS connectivity from cluster to Black Duck server |
+| **Policies** | Configured vulnerability policies for different application tiers |
+| **Project Groups** | Permission to create and manage project groups |
+
+### Container Registry Access
+
+- **Public Registries**: Docker Hub, GHCR access for base images
+- **Private Registries**: Authentication credentials for your application images
+- **Network**: Outbound HTTPS access for image downloads
+- **Rate Limits**: Consider registry rate limiting for high-volume scanning
+
+### Network Requirements
 
 ```bash
-# Create the system namespace
-kubectl create namespace bd-selfscan-system
+# Test Black Duck connectivity
+curl -k -H "Authorization: Bearer YOUR_TOKEN" "https://your-blackduck-server/api/current-user"
 
-# Create credentials secret
-kubectl create secret generic blackduck-creds \
-  --namespace=bd-selfscan-system \
-  --from-literal=url="https://your-blackduck-server.com" \
-  --from-literal=token="your-black-duck-api-token"
+# Test container registry access  
+docker pull ghcr.io/snps-steve/bd-selfscan/bd-selfscan:v1.1.0
+
+# Test Kubernetes API access
+kubectl auth can-i create jobs --all-namespaces
+kubectl auth can-i get pods --all-namespaces
 ```
 
-**Verify the secret**:
+## Quick Start - New Installation
+
+### Step 1: Prepare Environment
+
 ```bash
+# Clone repository
+git clone https://github.com/snps-steve/bd-selfscan.git
+cd bd-selfscan
+
+# Verify prerequisites
+kubectl version --short
+helm version --short
+
+# Create system namespace
+kubectl create namespace bd-selfscan-system
+```
+
+### Step 2: Configure Black Duck Credentials
+
+```bash
+# Create Black Duck credentials secret
+kubectl create secret generic blackduck-creds \
+  --from-literal=url="https://your-blackduck-server.com" \
+  --from-literal=token="your-blackduck-api-token" \
+  -n bd-selfscan-system
+
+# Verify secret creation
 kubectl get secret blackduck-creds -n bd-selfscan-system -o yaml
 ```
 
-### Step 2: Configure Applications
+### Step 3: Configure Applications
 
-Edit the application configuration file to match your Kubernetes applications:
+Edit `configs/applications.yaml` to define your target applications:
 
-```bash
-# Edit the main configuration file
-vim configs/applications.yaml
-```
-
-**Minimum required configuration for testing**:
 ```yaml
 applications:
-  - name: "Black Duck SCA"           # Your test case
-    namespace: "bd"                  # Replace with your BD SCA namespace
-    labelSelector: "app=blackduck"   # Replace with your BD SCA labels
-    projectGroup: "Black Duck SCA"
-    projectTier: 2
-    scanOnDeploy: true
-```
-
-**For production deployments**, add your actual applications:
-```yaml
-applications:
+  # Test application (recommended for initial validation)
   - name: "Black Duck SCA"
     namespace: "bd"
     labelSelector: "app=blackduck"
     projectGroup: "Black Duck SCA"
     projectTier: 2
-    scanOnDeploy: true
+    description: "Black Duck SCA test deployment"
     
+  # Your production applications
   - name: "Your Application Name"
     namespace: "your-app-namespace"
-    labelSelector: "app=your-app-label"
-    projectGroup: "Your Project Group Name"
+    labelSelector: "app=your-app,environment=production"
+    projectGroup: "Your Project Group"
     projectTier: 2
-    scanOnDeploy: true
+    scanOnDeploy: true  # Enable for Phase 2 automation
+    description: "Production application for vulnerability scanning"
 ```
 
-### Step 3: Validate Configuration
-
-Before deploying, validate your configuration:
-
+**Validate Configuration**:
 ```bash
 # Check YAML syntax
 yq eval '.applications[].name' configs/applications.yaml
 
 # Test label selectors find pods
-APP_NAMESPACE="bd"  # Replace with your namespace
-LABEL_SELECTOR="app=blackduck"  # Replace with your labels
-
-kubectl get pods -n "$APP_NAMESPACE" -l "$LABEL_SELECTOR"
+kubectl get pods -n "your-app-namespace" -l "app=your-app,environment=production"
 ```
 
-### Step 4: Deploy BD SelfScan (Phase 1)
-
-Deploy the Helm chart with Phase 1 (on-demand scanning) enabled:
+### Step 4: Install BD SelfScan
 
 ```bash
-# Install BD SelfScan
+# Install Phase 1 (On-Demand Scanning)
 helm install bd-selfscan ./bd-selfscan \
   --namespace bd-selfscan-system \
-  --create-namespace
-```
+  --create-namespace \
+  --set scanner.image="ghcr.io/snps-steve/bd-selfscan/bd-selfscan:v1.1.0"
 
-**Verify the deployment**:
-```bash
-# Check all resources are created
+# Verify installation
 kubectl get all -n bd-selfscan-system
-
-# Verify RBAC
 kubectl get clusterrole bd-selfscan
 kubectl get clusterrolebinding bd-selfscan
-
-# Check configuration
-kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml
 ```
 
-### Step 5: Test Phase 1 Scanning
+## Phase 1: On-Demand Scanning
 
-Test on-demand scanning with your configured applications:
+### Installation and Validation
 
-#### Test Single Application
+#### Install Phase 1 Only
 ```bash
-# Scan your Black Duck SCA test case
+# Install with Phase 1 features only
+helm install bd-selfscan ./bd-selfscan \
+  --namespace bd-selfscan-system \
+  --create-namespace \
+  --set automated.enabled=false \
+  --set onDemand.enabled=true
+```
+
+#### Test Single Application Scan
+```bash
+# Test scan of configured application
 helm install bd-scan-test ./bd-selfscan \
-  --set scanTarget="Black Duck SCA"
-```
+  --set scanTarget="Black Duck SCA" \
+  --set debug.enabled=true
 
-#### Monitor Scan Progress
-```bash
-# Watch job creation and completion
+# Monitor scan progress
 kubectl get jobs -n bd-selfscan-system -w
-
-# View scan logs
 kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner -f
-
-# Check scan results in Black Duck UI
 ```
 
-#### Test All Applications
+#### Test All Applications Scan
 ```bash
 # Scan all configured applications
 helm install bd-scan-all ./bd-selfscan
+
+# Monitor multiple scan jobs
+kubectl get jobs -n bd-selfscan-system --sort-by=.metadata.creationTimestamp
 ```
 
-### Step 6: Enable Phase 2 (Automated Scanning)
+### Phase 1 Validation Checklist
 
-After Phase 1 validation, enable automated scanning:
+- [ ] All pods running successfully
+- [ ] RBAC configured correctly
+- [ ] ConfigMaps and Secrets created
+- [ ] Single application scan completes successfully
+- [ ] Multiple application scan works
+- [ ] Project Groups created in Black Duck
+- [ ] Container vulnerabilities reported correctly
+- [ ] Scan jobs clean up automatically
+
+## Phase 2: Automated Scanning
+
+### Enable Phase 2 Features
+
+**Current Status**: 🚀 **85% COMPLETE** - Beta/Testing Phase
+
+**Available Features**:
+- ✅ Kubernetes controller for deployment event watching
+- ✅ Event-driven scan triggering on pod/deployment changes
+- ✅ Prometheus metrics collection and exposition
+- ✅ Health and readiness endpoints
+- ✅ Configuration hot-reloading
+- ✅ Async event processing with error handling
+
+**In Development**:
+- 🚧 Scheduled scanning with cron expressions
+- 🚧 Advanced policy integration with deployment blocking
+- 🚧 GitOps integration (ArgoCD/Flux)
+
+### Install Phase 2
 
 ```bash
 # Upgrade to enable Phase 2
 helm upgrade bd-selfscan ./bd-selfscan \
-  --set automated.enabled=true
+  --set automated.enabled=true \
+  --set monitoring.prometheus.enabled=true
+
+# Verify controller deployment
+kubectl get pods -n bd-selfscan-system -l app.kubernetes.io/component=controller
+kubectl describe deployment bd-selfscan-controller -n bd-selfscan-system
 ```
 
-**Verify Phase 2 deployment**:
+### Validate Phase 2 Installation
+
+#### Check Controller Health
 ```bash
 # Check controller is running
 kubectl get pods -n bd-selfscan-system -l app.kubernetes.io/component=controller
@@ -166,274 +234,326 @@ kubectl get pods -n bd-selfscan-system -l app.kubernetes.io/component=controller
 # Check controller logs
 kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller -f
 
-# Test controller health
-kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8081:8081
+# Test health endpoints
+kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8081:8081 &
 curl http://localhost:8081/health
+curl http://localhost:8081/ready
+
+# Test metrics endpoint
+kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8080:8080 &
+curl http://localhost:8080/metrics
 ```
 
-## 🔧 Advanced Configuration
+#### Test Event-Driven Scanning
+```bash
+# Create a test deployment with scanOnDeploy: true
+kubectl create deployment nginx-test --image=nginx:latest -n default
+kubectl label deployment nginx-test app=nginx-test -n default
+
+# Check if scan job was automatically created
+kubectl get jobs -n bd-selfscan-system -l triggered-by=deployment-event
+
+# Clean up test
+kubectl delete deployment nginx-test -n default
+```
+
+### Phase 2 Configuration
+
+#### Application Configuration for Automation
+```yaml
+applications:
+  - name: "Critical Production App"
+    namespace: "production"
+    labelSelector: "app=critical-app,tier=production"
+    projectGroup: "Critical Apps"
+    projectTier: 1
+    
+    # Phase 2 automation settings
+    scanOnDeploy: true              # Auto-scan on deployment
+    # scanSchedule: "0 2 * * 0"     # Weekly (future feature)
+    # policyBreakBuild: true        # Block on violations (future)
+    
+  - name: "Development App"
+    namespace: "development"
+    labelSelector: "app=dev-app"
+    projectGroup: "Dev Apps"
+    projectTier: 4
+    
+    # Development settings
+    scanOnDeploy: false             # Manual scanning only
+    # scanSchedule: "0 6 * * 6"     # Weekly Saturday (future)
+```
+
+#### Controller Configuration
+```yaml
+# In values.yaml or --set flags
+automated:
+  enabled: true
+  
+  controller:
+    replicas: 1
+    resources:
+      requests: { memory: "512Mi", cpu: "200m" }
+      limits: { memory: "1Gi", cpu: "500m" }
+    
+    # Event processing settings
+    maxConcurrentScans: 5
+    scanJobTimeout: 3600
+    cleanupInterval: 3600
+    configReloadInterval: 600
+    
+    # Monitoring ports
+    metricsPort: 8080
+    healthPort: 8081
+```
+
+### Phase 2 Validation Checklist
+
+- [ ] Controller pod running and healthy
+- [ ] Health endpoints responding correctly
+- [ ] Metrics endpoint accessible
+- [ ] Deployment events trigger scans (for `scanOnDeploy: true` apps)
+- [ ] Configuration hot-reload working
+- [ ] Prometheus metrics collection working
+- [ ] Old scan jobs being cleaned up automatically
+
+## Advanced Configuration
 
 ### Private Container Registries
 
-If your applications use private container registries, configure registry access:
+If your applications use private container registries:
 
 ```bash
 # Create registry credentials secret
 kubectl create secret docker-registry registry-creds \
   --namespace=bd-selfscan-system \
   --docker-server=registry.company.com \
-  --docker-username=username \
-  --docker-password=password \
-  --docker-email=email@company.com
+  --docker-username=your-username \
+  --docker-password=your-password \
+  --docker-email=your-email@company.com
 
-# Update values.yaml
+# Update deployment to use registry credentials
 helm upgrade bd-selfscan ./bd-selfscan \
-  --set registry.secretName=registry-creds
+  --set scanner.imagePullSecrets[0].name=registry-creds
 ```
 
-### Custom Resource Limits
+### Resource Optimization
 
-Adjust resource limits based on your container sizes and cluster capacity:
-
+#### For Large Container Images
 ```yaml
 # In values.yaml or --set flags
 scanner:
   resources:
     requests:
-      memory: "4Gi"        # Increase for large containers
-      cpu: "1"             # Increase for faster scans
+      memory: "8Gi"
+      cpu: "2"
+      ephemeralStorage: "50Gi"
     limits:
-      memory: "16Gi"       # Increase for complex applications  
-      cpu: "8"             # Max CPU allocation
-      ephemeralStorage: "100Gi"  # Storage for large container images
+      memory: "32Gi"
+      cpu: "8"
+      ephemeralStorage: "200Gi"
+  
+  # Extended timeouts for large images
+  imageDownloadTimeout: 1800  # 30 minutes
+  scanTimeout: 7200          # 2 hours
 ```
 
+#### For High-Volume Environments
 ```bash
 helm upgrade bd-selfscan ./bd-selfscan \
+  --set automated.controller.maxConcurrentScans=10 \
   --set scanner.resources.limits.memory=16Gi \
   --set scanner.resources.limits.cpu=8 \
-  --set scanner.resources.limits.ephemeralStorage=100Gi
+  --set scanning.maxConcurrentDownloads=3
 ```
 
-### Enable Monitoring
+### Security Hardening
 
-Deploy with Prometheus ServiceMonitor for monitoring:
+#### Network Policies (Optional)
+```yaml
+# Create network policy for bd-selfscan-system namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bd-selfscan-netpol
+  namespace: bd-selfscan-system
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to: []  # Allow all egress for Black Duck API and registry access
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
+```
+
+#### Pod Security Standards
+```yaml
+# Enable pod security standards
+automated:
+  controller:
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65534
+      runAsGroup: 65534
+      fsGroup: 65534
+      seccompProfile:
+        type: RuntimeDefault
+    
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+```
+
+## Monitoring Setup
+
+### Prometheus Integration
 
 ```bash
+# Install with Prometheus monitoring enabled
 helm upgrade bd-selfscan ./bd-selfscan \
-  --set monitoring.enabled=true \
-  --set monitoring.serviceMonitor.enabled=true
+  --set monitoring.prometheus.enabled=true \
+  --set monitoring.serviceMonitor.enabled=true \
+  --set monitoring.prometheusRule.enabled=true
 ```
 
-### Debug Mode
+### Key Metrics to Monitor
 
-Enable debug logging for troubleshooting:
+| Metric | Description | Alert Threshold |
+|--------|-------------|-----------------|
+| `bd_selfscan_deployment_events_total` | Deployment events processed | - |
+| `bd_selfscan_jobs_created_total` | Scan jobs created | > 0 in 24h |
+| `bd_selfscan_jobs_failed_total` | Failed scan jobs | > 5% failure rate |
+| `bd_selfscan_job_duration_seconds` | Scan job duration | > 3600s (1 hour) |
+| `bd_selfscan_controller_healthy` | Controller health status | < 1 (unhealthy) |
+
+### Grafana Dashboard
 
 ```bash
-helm upgrade bd-selfscan ./bd-selfscan \
-  --set debug.enabled=true \
-  --set debug.logLevel=DEBUG \
-  --set debug.keepTempFiles=true
+# Import Grafana dashboard (if available)
+# Dashboard ID: TBD - will be provided in future release
 ```
 
-## 🏗️ Production Deployment Checklist
+## Validation and Testing
 
-### Pre-Deployment
-- [ ] Black Duck server accessible from Kubernetes cluster
-- [ ] API token has project creation permissions
-- [ ] Sufficient cluster resources allocated
-- [ ] Network policies configured (if required)
-- [ ] Container registry access configured
-- [ ] Application configuration validated
+### End-to-End Testing
 
-### Deployment Validation
-- [ ] All pods running successfully
-- [ ] RBAC configured correctly
-- [ ] ConfigMaps and Secrets created
-- [ ] Single application scan works
-- [ ] Multiple application scan works
-- [ ] Project Groups created in Black Duck
-- [ ] Container vulnerabilities reported correctly
-
-### Phase 2 Validation (if enabled)
-- [ ] Controller pod running and healthy
-- [ ] Deployment events trigger scans
-- [ ] Metrics endpoint accessible
-- [ ] Health checks passing
-- [ ] Scheduled scans working (if configured)
-
-### Monitoring Setup
-- [ ] Prometheus metrics collection
-- [ ] Grafana dashboards configured
-- [ ] Alerting rules configured
-- [ ] Log aggregation configured
-
-## 🔍 Post-Installation Verification
-
-### Functional Testing
-
-#### Test 1: Single Application Scan
+#### Phase 1 Validation
 ```bash
-# Test scan execution
-helm install verification-test ./bd-selfscan \
-  --set scanTarget="Black Duck SCA"
+#!/bin/bash
+# Phase 1 validation script
 
-# Wait for completion
-kubectl wait --for=condition=complete job -l scan-type=on-demand -n bd-selfscan-system --timeout=1800s
+echo "=== BD SelfScan Phase 1 Validation ==="
 
-# Check results
-kubectl logs -n bd-selfscan-system job/$(kubectl get jobs -n bd-selfscan-system -o name | head -1)
+# Test 1: Single application scan
+echo "Testing single application scan..."
+helm install bd-test-single ./bd-selfscan \
+  --set scanTarget="Black Duck SCA" \
+  --wait --timeout=30m
+
+if kubectl wait --for=condition=complete job -l scan-type=on-demand -n bd-selfscan-system --timeout=1800s; then
+    echo "✅ Single application scan: PASSED"
+else
+    echo "❌ Single application scan: FAILED"
+    kubectl logs -n bd-selfscan-system -l scan-type=on-demand --tail=50
+fi
+
+# Test 2: Multiple application scan
+echo "Testing multiple application scan..."
+helm install bd-test-multi ./bd-selfscan --wait --timeout=45m
+
+if kubectl wait --for=condition=complete job -l scan-type=on-demand -n bd-selfscan-system --timeout=2700s; then
+    echo "✅ Multiple application scan: PASSED"
+else
+    echo "❌ Multiple application scan: FAILED"
+fi
+
+# Cleanup
+helm uninstall bd-test-single bd-test-multi
 ```
 
-#### Test 2: Black Duck Integration
-1. Log into Black Duck UI
-2. Verify "Black Duck SCA" Project Group exists
-3. Verify container projects are created with proper versions
-4. Verify vulnerability data is populated
-5. Check component layer attribution
-
-#### Test 3: Configuration System
+#### Phase 2 Validation
 ```bash
-# Test application discovery
-./scripts/scan-application.sh "Black Duck SCA"
+#!/bin/bash
+# Phase 2 validation script
 
-# Test configuration parsing
-yq eval '.applications[] | select(.scanOnDeploy == true) | .name' configs/applications.yaml
+echo "=== BD SelfScan Phase 2 Validation ==="
+
+# Test 1: Controller health
+echo "Testing controller health..."
+if kubectl get pods -n bd-selfscan-system -l app.kubernetes.io/component=controller --field-selector=status.phase=Running | grep -q Running; then
+    echo "✅ Controller running: PASSED"
+else
+    echo "❌ Controller running: FAILED"
+    exit 1
+fi
+
+# Test 2: Health endpoints
+echo "Testing health endpoints..."
+kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8081:8081 &
+PORTFORWARD_PID=$!
+sleep 5
+
+if curl -s http://localhost:8081/health | grep -q "healthy"; then
+    echo "✅ Health endpoint: PASSED"
+else
+    echo "❌ Health endpoint: FAILED"
+fi
+
+if curl -s http://localhost:8081/ready | grep -q "ready"; then
+    echo "✅ Ready endpoint: PASSED"
+else
+    echo "❌ Ready endpoint: FAILED"
+fi
+
+kill $PORTFORWARD_PID
+
+# Test 3: Metrics endpoint
+echo "Testing metrics endpoint..."
+kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8080:8080 &
+PORTFORWARD_PID=$!
+sleep 5
+
+if curl -s http://localhost:8080/metrics | grep -q "bd_selfscan"; then
+    echo "✅ Metrics endpoint: PASSED"
+else
+    echo "❌ Metrics endpoint: FAILED"
+fi
+
+kill $PORTFORWARD_PID
+
+echo "Phase 2 validation complete!"
 ```
 
-#### Test 4: Controller Health (Phase 2)
-```bash
-# Test controller endpoints
-kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8080:8080 8081:8081
+## Upgrade Process
 
-# Health check
-curl http://localhost:8081/health
-# Should return: healthy
-
-# Metrics check  
-curl http://localhost:8080/metrics | grep bd_selfscan
-# Should return BD SelfScan metrics
-```
-
-### Performance Testing
-
-#### Test 5: Resource Usage
-```bash
-# Monitor resource usage during scans
-kubectl top pods -n bd-selfscan-system -l app.kubernetes.io/component=scanner
-
-# Check for resource constraints
-kubectl describe pod -n bd-selfscan-system -l app.kubernetes.io/component=scanner
-```
-
-#### Test 6: Concurrent Scans
-```bash
-# Test multiple concurrent scans
-for i in {1..3}; do
-  helm install concurrent-test-$i ./bd-selfscan \
-    --set scanTarget="Black Duck SCA" &
-done
-
-# Monitor all scans
-kubectl get jobs -n bd-selfscan-system -w
-```
-
-## 🚨 Troubleshooting Installation
-
-### Common Issues and Solutions
-
-#### Issue: Pods stuck in Pending state
-**Cause**: Insufficient cluster resources
-**Solution**:
-```bash
-# Check resource requests
-kubectl describe pod -n bd-selfscan-system
-
-# Reduce resource requests if needed
-helm upgrade bd-selfscan ./bd-selfscan \
-  --set scanner.resources.requests.memory=1Gi \
-  --set scanner.resources.requests.cpu=100m
-```
-
-#### Issue: Black Duck connection failures
-**Cause**: Network connectivity or credentials
-**Solution**:
-```bash
-# Test connectivity from within cluster
-kubectl run test-connectivity --rm -it --image=alpine --restart=Never -- \
-  wget -O- --no-check-certificate https://your-blackduck-server.com/api/current-version
-
-# Verify credentials
-kubectl get secret blackduck-creds -n bd-selfscan-system -o yaml
-```
-
-#### Issue: No container images found
-**Cause**: Incorrect label selector or namespace
-**Solution**:
-```bash
-# Debug pod discovery
-kubectl get pods -n your-namespace --show-labels
-kubectl get pods -n your-namespace -l "your-label-selector"
-
-# Update configuration with correct labels
-```
-
-#### Issue: Permission errors
-**Cause**: Insufficient RBAC permissions
-**Solution**:
-```bash
-# Check cluster role binding
-kubectl describe clusterrolebinding bd-selfscan
-
-# Recreate RBAC if needed
-kubectl delete clusterrolebinding bd-selfscan
-kubectl delete clusterrole bd-selfscan
-helm upgrade bd-selfscan ./bd-selfscan
-```
-
-#### Issue: Container image download failures  
-**Cause**: Private registry or network issues
-**Solution**:
-```bash
-# Test image access
-kubectl run test-image-access --rm -it --image=alpine --restart=Never -- \
-  apk add skopeo && skopeo inspect docker://your-registry/your-image:tag
-
-# Configure registry credentials (see Advanced Configuration section)
-```
-
-### Debug Commands
-
-```bash
-# Get all BD SelfScan resources
-kubectl get all,cm,secrets,clusterrole,clusterrolebinding -n bd-selfscan-system
-
-# View detailed events  
-kubectl get events -n bd-selfscan-system --sort-by='.lastTimestamp'
-
-# Describe problematic resources
-kubectl describe pod -n bd-selfscan-system -l app.kubernetes.io/component=scanner
-
-# Check logs with timestamps
-kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner --timestamps=true
-
-# Export configuration for analysis
-kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml > current-config.yaml
-```
-
-## 🔄 Upgrade Process
-
-### Upgrading BD SelfScan
+### Backup Current Configuration
 
 ```bash
 # Backup current configuration
-kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml > backup-config.yaml
+kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml > backup-applications-config.yaml
+kubectl get secret blackduck-creds -n bd-selfscan-system -o yaml > backup-blackduck-creds.yaml
+helm get values bd-selfscan > backup-helm-values.yaml
+```
 
-# Upgrade with Helm
+### Upgrade BD SelfScan
+
+```bash
+# Standard upgrade
 helm upgrade bd-selfscan ./bd-selfscan
+
+# Upgrade with new image version
+helm upgrade bd-selfscan ./bd-selfscan \
+  --set scanner.image="ghcr.io/snps-steve/bd-selfscan/bd-selfscan:v1.2.0"
 
 # Verify upgrade
 kubectl rollout status deployment/bd-selfscan-controller -n bd-selfscan-system
+kubectl get pods -n bd-selfscan-system
 ```
 
 ### Configuration Updates
@@ -444,9 +564,12 @@ kubectl apply -f configs/applications.yaml
 
 # Trigger configuration reload (Phase 2)
 kubectl rollout restart deployment/bd-selfscan-controller -n bd-selfscan-system
+
+# Verify configuration reload
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep "Configuration reloaded"
 ```
 
-## 🗑️ Uninstallation
+## Uninstallation
 
 ### Complete Removal
 
@@ -454,41 +577,56 @@ kubectl rollout restart deployment/bd-selfscan-controller -n bd-selfscan-system
 # Remove Helm release
 helm uninstall bd-selfscan
 
-# Remove cluster-wide resources (if needed)
+# Remove cluster-wide resources
 kubectl delete clusterrole bd-selfscan
 kubectl delete clusterrolebinding bd-selfscan
 
-# Remove namespace (optional)
+# Remove namespace (optional - preserves scan history)
 kubectl delete namespace bd-selfscan-system
 ```
 
-### Partial Cleanup (Keep Data)
+### Partial Cleanup (Keep Configuration)
 
 ```bash
 # Disable automated scanning but keep configuration
 helm upgrade bd-selfscan ./bd-selfscan \
   --set automated.enabled=false
 
-# Remove only scan jobs  
+# Remove only scan jobs
 kubectl delete jobs -n bd-selfscan-system -l app.kubernetes.io/name=bd-selfscan
+
+# Keep completed jobs for history
+kubectl delete jobs -n bd-selfscan-system -l app.kubernetes.io/name=bd-selfscan --field-selector=status.successful=1
 ```
 
-## 📞 Support and Next Steps
+## Support and Next Steps
 
 ### Getting Help
-- **Documentation**: See [README.md](../README.md) for comprehensive documentation
-- **Configuration**: See [configs/README.md](../configs/README.md) for configuration details  
-- **Scripts**: See [scripts/README.md](../scripts/README.md) for script documentation
-- **Issues**: Report issues via GitHub Issues
-- **Community**: Join discussions in GitHub Discussions
+
+- **📖 Documentation**: [README.md](../README.md) | [Configuration](CONFIGURATION.md) | [Troubleshooting](TROUBLESHOOTING.md)
+- **🔧 API Reference**: [API Documentation](API.md) - Phase 2 controller APIs
+- **🗺️ Roadmap**: [Implementation Roadmap](ROADMAP.md) - Current status and future plans
+- **📝 Change Log**: [Version History](CHANGELOG.md) - Release notes and updates
+- **🏗️ Architecture**: [System Architecture](ARCHITECTURE.md) - Design and technical details
+- **🐛 Issues**: [GitHub Issues](https://github.com/snps-steve/bd-selfscan/issues)
+- **💬 Discussions**: [GitHub Discussions](https://github.com/snps-steve/bd-selfscan/discussions)
 
 ### Next Steps After Installation
-1. **Add More Applications**: Gradually add your production applications to the configuration
-2. **Configure Monitoring**: Set up Grafana dashboards and alerting rules
-3. **Optimize Performance**: Tune resource limits and parallel scanning based on usage patterns
-4. **Integrate with CI/CD**: Configure your deployment pipelines to work with automated scanning
-5. **Security Hardening**: Implement network policies and additional security measures
+
+1. **📊 Add More Applications**: Gradually add production applications to scanning
+2. **📈 Configure Monitoring**: Set up Grafana dashboards and alerting rules
+3. **⚡ Optimize Performance**: Tune resource limits based on usage patterns
+4. **🔄 Integrate with CI/CD**: Configure deployment pipelines with automated scanning
+5. **🔒 Security Hardening**: Implement network policies and additional security measures
+6. **📋 Operational Procedures**: Establish monitoring, alerting, and maintenance procedures
 
 ---
 
-**Installation complete!** Your BD SelfScan deployment should now be scanning containers and reporting vulnerabilities to Black Duck SCA.
+**✅ Installation Complete!** Your BD SelfScan deployment should now be scanning containers and reporting vulnerabilities to Black Duck SCA.
+
+**📊 Current Implementation Status:**
+- **Phase 1**: ✅ Production Ready (100% complete)
+- **Phase 2**: 🚀 85% Complete (Beta phase with controller, metrics, health endpoints)
+
+**🔗 For advanced configuration options, see [CONFIGURATION.md](CONFIGURATION.md)**
+**🔍 For troubleshooting help, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)**

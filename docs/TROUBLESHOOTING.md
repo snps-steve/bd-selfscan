@@ -1,42 +1,28 @@
 # BD SelfScan Troubleshooting Guide
 
-This guide helps you diagnose and resolve common issues with BD SelfScan container vulnerability scanning.
+This guide helps you diagnose and resolve issues with BD SelfScan container vulnerability scanning for both Phase 1 (On-Demand) and Phase 2 (Automated) deployments.
 
 ## 📋 Table of Contents
 
 - [Quick Diagnostics](#quick-diagnostics)
 - [Installation Issues](#installation-issues)
+- [Phase 1: On-Demand Scanning Issues](#phase-1-on-demand-scanning-issues)
+- [Phase 2: Automated Scanning Issues](#phase-2-automated-scanning-issues)
 - [Configuration Issues](#configuration-issues)
-- [Scanning Issues](#scanning-issues)
 - [Black Duck Integration Issues](#black-duck-integration-issues)
 - [Performance Issues](#performance-issues)
-- [Debugging Tools](#debugging-tools)
+- [Security and Permissions Issues](#security-and-permissions-issues)
+- [Monitoring and Metrics Issues](#monitoring-and-metrics-issues)
 - [Common Error Messages](#common-error-messages)
+- [Debugging Tools and Commands](#debugging-tools-and-commands)
 
 ## Quick Diagnostics
 
-### Health Check Commands
-
-```bash
-# Check overall system health
-kubectl get all -n bd-selfscan-system
-
-# Check recent job status
-kubectl get jobs -n bd-selfscan-system --sort-by=.metadata.creationTimestamp
-
-# Check pod logs
-kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner --tail=50
-
-# Check for resource issues
-kubectl top pods -n bd-selfscan-system
-kubectl describe nodes
-```
-
-### Quick Status Check
+### System Health Check
 
 ```bash
 #!/bin/bash
-# BD SelfScan Health Check Script
+# BD SelfScan Quick Health Check
 
 echo "=== BD SelfScan System Status ==="
 
@@ -45,6 +31,7 @@ if kubectl get namespace bd-selfscan-system >/dev/null 2>&1; then
     echo "✅ Namespace: bd-selfscan-system exists"
 else
     echo "❌ Namespace: bd-selfscan-system missing"
+    exit 1
 fi
 
 # Check RBAC
@@ -54,6 +41,12 @@ else
     echo "❌ RBAC: ClusterRole missing"
 fi
 
+if kubectl get clusterrolebinding bd-selfscan >/dev/null 2>&1; then
+    echo "✅ RBAC: ClusterRoleBinding exists"
+else
+    echo "❌ RBAC: ClusterRoleBinding missing"
+fi
+
 # Check secrets
 if kubectl get secret blackduck-creds -n bd-selfscan-system >/dev/null 2>&1; then
     echo "✅ Secrets: blackduck-creds exists"
@@ -61,17 +54,59 @@ else
     echo "❌ Secrets: blackduck-creds missing"
 fi
 
+# Check Phase 2 controller (if enabled)
+if kubectl get deployment bd-selfscan-controller -n bd-selfscan-system >/dev/null 2>&1; then
+    CONTROLLER_READY=$(kubectl get deployment bd-selfscan-controller -n bd-selfscan-system -o jsonpath='{.status.readyReplicas}')
+    if [ "$CONTROLLER_READY" = "1" ]; then
+        echo "✅ Phase 2: Controller running and ready"
+    else
+        echo "⚠️  Phase 2: Controller not ready (replicas: $CONTROLLER_READY)"
+    fi
+else
+    echo "ℹ️  Phase 2: Controller not deployed (Phase 1 only)"
+fi
+
 # Check recent jobs
-JOB_COUNT=$(kubectl get jobs -n bd-selfscan-system --no-headers | wc -l)
+JOB_COUNT=$(kubectl get jobs -n bd-selfscan-system --no-headers 2>/dev/null | wc -l)
 echo "📊 Jobs: $JOB_COUNT total jobs found"
 
 # Check failed jobs
-FAILED_JOBS=$(kubectl get jobs -n bd-selfscan-system --no-headers | grep -c "0/1" || true)
+FAILED_JOBS=$(kubectl get jobs -n bd-selfscan-system --no-headers 2>/dev/null | grep -c "0/1" || true)
 if [ "$FAILED_JOBS" -gt 0 ]; then
     echo "⚠️  Failed Jobs: $FAILED_JOBS jobs failed"
+    echo "   Use: kubectl get jobs -n bd-selfscan-system --field-selector status.successful=0"
 else
     echo "✅ Job Status: No failed jobs"
 fi
+
+# Check pod status
+RUNNING_PODS=$(kubectl get pods -n bd-selfscan-system --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l)
+FAILED_PODS=$(kubectl get pods -n bd-selfscan-system --field-selector=status.phase=Failed --no-headers 2>/dev/null | wc -l)
+echo "📊 Pods: $RUNNING_PODS running, $FAILED_PODS failed"
+
+echo "=== Health Check Complete ==="
+```
+
+### Quick Commands
+
+```bash
+# Check overall system health
+kubectl get all -n bd-selfscan-system
+
+# Check recent job status
+kubectl get jobs -n bd-selfscan-system --sort-by=.metadata.creationTimestamp
+
+# Check pod logs (most recent)
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner --tail=50
+
+# Check controller logs (Phase 2)
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller --tail=50
+
+# Check resource usage
+kubectl top pods -n bd-selfscan-system 2>/dev/null || echo "Metrics server not available"
+
+# Check events
+kubectl get events -n bd-selfscan-system --sort-by=.metadata.creationTimestamp
 ```
 
 ## Installation Issues
@@ -81,11 +116,12 @@ fi
 **Symptoms:**
 ```
 Error: failed to create resource: unable to recognize "": no matches for kind "Job" in version "batch/v1"
+Error: INSTALLATION FAILED: unable to build kubernetes objects from release manifest
 ```
 
 **Diagnosis:**
 ```bash
-# Check Kubernetes version
+# Check Kubernetes version compatibility
 kubectl version --short
 
 # Check Helm version
@@ -93,412 +129,686 @@ helm version --short
 
 # Validate chart syntax
 helm lint ./bd-selfscan
+
+# Test dry-run
+helm install bd-selfscan ./bd-selfscan --dry-run --debug
 ```
 
 **Solutions:**
-1. **Kubernetes version compatibility:**
+
+1. **Kubernetes Version Compatibility:**
    ```bash
-   # Ensure Kubernetes 1.25+
+   # Ensure Kubernetes 1.25+ for Job TTL and ephemeral storage
    kubectl version --short
+   # Client Version: v1.27.0
+   # Server Version: v1.27.0
    ```
 
-2. **Update Helm chart API versions:**
-   ```yaml
-   # In templates/job-on-demand.yaml
-   apiVersion: batch/v1  # Ensure correct API version
-   ```
-
-3. **Check chart dependencies:**
+2. **Fix API Version Issues:**
    ```bash
-   helm dependency update ./bd-selfscan
+   # Update deprecated APIs in templates
+   # batch/v1beta1 → batch/v1
+   grep -r "batch/v1beta1" templates/ || echo "No deprecated APIs found"
    ```
 
-### Issue: RBAC Permissions Denied
+3. **Check Resource Quotas:**
+   ```bash
+   # Verify namespace has sufficient quota
+   kubectl describe quota -n bd-selfscan-system
+   kubectl describe limitrange -n bd-selfscan-system
+   ```
+
+### Issue: Image Pull Failures
 
 **Symptoms:**
 ```
-Error: pods is forbidden: User "system:serviceaccount:bd-selfscan-system:bd-selfscan" cannot list pods in namespace "default"
+Failed to pull image "ghcr.io/snps-steve/bd-selfscan/bd-selfscan:v1.1.0": rpc error: code = Unknown
+ImagePullBackOff
 ```
 
 **Diagnosis:**
 ```bash
-# Test service account permissions
-kubectl auth can-i get pods --all-namespaces --as=system:serviceaccount:bd-selfscan-system:bd-selfscan
+# Check image availability
+docker pull ghcr.io/snps-steve/bd-selfscan/bd-selfscan:v1.1.0
 
-# Check ClusterRole binding
-kubectl describe clusterrolebinding bd-selfscan
+# Check image pull secrets
+kubectl get secrets -n bd-selfscan-system
+kubectl describe secret <image-pull-secret> -n bd-selfscan-system
+
+# Check pod events
+kubectl describe pod <pod-name> -n bd-selfscan-system
 ```
 
 **Solutions:**
-1. **Verify ClusterRole exists:**
+
+1. **Public Registry Access:**
    ```bash
-   kubectl get clusterrole bd-selfscan -o yaml
+   # Test registry connectivity
+   curl -I https://ghcr.io/v2/
+   
+   # Check rate limiting
+   docker pull --quiet ghcr.io/snps-steve/bd-selfscan/bd-selfscan:v1.1.0
    ```
 
-2. **Check ClusterRoleBinding:**
+2. **Private Registry Credentials:**
    ```bash
-   kubectl get clusterrolebinding bd-selfscan -o yaml
+   # Create registry secret
+   kubectl create secret docker-registry registry-creds \
+     --docker-server=your-registry.com \
+     --docker-username=username \
+     --docker-password=password \
+     --docker-email=email@company.com \
+     -n bd-selfscan-system
+   
+   # Update values.yaml
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set scanner.imagePullSecrets[0].name=registry-creds
    ```
 
-3. **Recreate RBAC resources:**
+### Issue: RBAC Permission Denied
+
+**Symptoms:**
+```
+Error from server (Forbidden): pods is forbidden: User "system:serviceaccount:bd-selfscan-system:bd-selfscan" cannot list resource "pods"
+```
+
+**Diagnosis:**
+```bash
+# Check service account permissions
+kubectl auth can-i list pods --as=system:serviceaccount:bd-selfscan-system:bd-selfscan
+kubectl auth can-i create jobs --as=system:serviceaccount:bd-selfscan-system:bd-selfscan
+
+# Check RBAC resources
+kubectl get clusterrole bd-selfscan -o yaml
+kubectl get clusterrolebinding bd-selfscan -o yaml
+```
+
+**Solutions:**
+
+1. **Recreate RBAC Resources:**
    ```bash
+   # Delete and recreate RBAC
    kubectl delete clusterrole bd-selfscan
    kubectl delete clusterrolebinding bd-selfscan
-   helm upgrade bd-selfscan ./bd-selfscan
+   
+   # Reinstall with RBAC
+   helm upgrade bd-selfscan ./bd-selfscan --set rbac.create=true
    ```
 
-### Issue: ConfigMap Not Found
+2. **Manual RBAC Creation:**
+   ```yaml
+   # Create minimal required permissions
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: ClusterRole
+   metadata:
+     name: bd-selfscan
+   rules:
+   - apiGroups: [""]
+     resources: ["pods"]
+     verbs: ["get", "list"]
+   - apiGroups: ["batch"]
+     resources: ["jobs"]
+     verbs: ["create", "get", "list", "delete"]
+   - apiGroups: ["apps"]
+     resources: ["deployments"]
+     verbs: ["get", "list", "watch"]
+   ```
+
+## Phase 1: On-Demand Scanning Issues
+
+### Issue: Scan Jobs Fail Immediately
 
 **Symptoms:**
 ```
-Error: couldn't find key applications.yaml in ConfigMap bd-selfscan-applications
+Job failed with backoffLimit exceeded
+Pod status: Error or CrashLoopBackOff
 ```
 
 **Diagnosis:**
 ```bash
-# Check ConfigMap contents
+# Check job status
+kubectl get jobs -n bd-selfscan-system -l app.kubernetes.io/component=scanner
+
+# Check pod logs
+JOB_NAME=$(kubectl get jobs -n bd-selfscan-system -l app.kubernetes.io/component=scanner --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}')
+kubectl logs -n bd-selfscan-system job/$JOB_NAME
+
+# Check pod description
+POD_NAME=$(kubectl get pods -n bd-selfscan-system -l job-name=$JOB_NAME -o jsonpath='{.items[0].metadata.name}')
+kubectl describe pod $POD_NAME -n bd-selfscan-system
+```
+
+**Common Solutions:**
+
+1. **Script Permission Issues:**
+   ```bash
+   # Check if scripts are executable in container
+   kubectl exec -it $POD_NAME -n bd-selfscan-system -- ls -la /scripts/
+   
+   # Fix: Ensure scripts use #!/bin/bash
+   # Scripts should start with: #!/bin/bash
+   ```
+
+2. **Missing Environment Variables:**
+   ```bash
+   # Check required variables are set
+   kubectl exec -it $POD_NAME -n bd-selfscan-system -- env | grep -E "(BD_URL|BD_TOKEN|TARGET_NS)"
+   
+   # Verify secret is mounted correctly
+   kubectl describe secret blackduck-creds -n bd-selfscan-system
+   ```
+
+3. **Resource Constraints:**
+   ```bash
+   # Check if pod was OOMKilled
+   kubectl describe pod $POD_NAME -n bd-selfscan-system | grep -i oom
+   
+   # Increase memory limits
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set scanner.resources.limits.memory=16Gi
+   ```
+
+### Issue: No Pods Found for Application
+
+**Symptoms:**
+```
+[INFO] Target Namespace: myapp
+[INFO] Label Selector: app=myapp
+[ERROR] No pods found matching label selector
+```
+
+**Diagnosis:**
+```bash
+# Test label selector manually
+NAMESPACE="myapp"
+LABEL_SELECTOR="app=myapp"
+kubectl get pods -n "$NAMESPACE" -l "$LABEL_SELECTOR"
+
+# Check if pods exist in namespace
+kubectl get pods -n "$NAMESPACE"
+
+# Check application configuration
 kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml
-
-# Verify applications.yaml file exists
-ls -la configs/applications.yaml
 ```
 
 **Solutions:**
-1. **Recreate ConfigMap:**
-   ```bash
-   kubectl create configmap bd-selfscan-applications \
-     --from-file=applications.yaml=configs/applications.yaml \
-     --namespace bd-selfscan-system \
-     --dry-run=client -o yaml | kubectl apply -f -
-   ```
 
-2. **Verify Helm template processing:**
-   ```bash
-   helm template bd-selfscan ./bd-selfscan | grep -A 20 "kind: ConfigMap"
-   ```
-
-## Configuration Issues
-
-### Issue: Application Not Found in Configuration
-
-**Symptoms:**
-```
-[ERROR] Application 'My App' not found in configuration
-Available applications:
-  - Black Duck SCA
-```
-
-**Diagnosis:**
-```bash
-# List all configured applications
-yq eval '.applications[].name' configs/applications.yaml
-
-# Check for case sensitivity or whitespace issues
-grep -n "My App" configs/applications.yaml
-```
-
-**Solutions:**
-1. **Verify exact application name:**
-   ```bash
-   # Application names are case-sensitive
-   yq eval '.applications[].name' configs/applications.yaml
-   ```
-
-2. **Add missing application:**
+1. **Fix Label Selector:**
    ```yaml
-   # In configs/applications.yaml
+   # Update configs/applications.yaml
    applications:
-     - name: "My App"  # Exact name match required
-       namespace: "my-app-namespace"
-       labelSelector: "app=my-app"
-       projectGroup: "My App Group"
+     - name: "My Application"
+       namespace: "myapp"
+       labelSelector: "app.kubernetes.io/name=myapp"  # Use correct labels
+       projectGroup: "My Project Group"
    ```
 
-### Issue: Invalid Label Selector
-
-**Symptoms:**
-```
-[WARNING] No container images found in namespace 'app' with labels 'invalid-selector'
-```
-
-**Diagnosis:**
-```bash
-# Test label selector
-kubectl get pods -n app -l "invalid-selector"
-
-# Show available labels in namespace
-kubectl get pods -n app --show-labels
-
-# Validate selector syntax
-kubectl get pods -n app -l "app=myapp" --dry-run=server
-```
-
-**Solutions:**
-1. **Correct label selector syntax:**
-   ```yaml
-   # Single label
-   labelSelector: "app=myapp"
+2. **Verify Pod Labels:**
+   ```bash
+   # Check actual pod labels
+   kubectl get pods -n myapp --show-labels
    
-   # Multiple labels (AND condition)
-   labelSelector: "app=myapp,version=v1.0.0"
-   
-   # NOT operator
-   labelSelector: "app=myapp,environment!=test"
+   # Use correct label format
+   kubectl get pods -n myapp -l "app.kubernetes.io/name=myapp"
    ```
 
-2. **Find correct labels:**
-   ```bash
-   # List all pods with labels
-   kubectl get pods -n your-namespace --show-labels
-   
-   # Test different selectors
-   kubectl get pods -n your-namespace -l "team=backend"
-   ```
-
-### Issue: Black Duck Credentials Invalid
+### Issue: Container Image Download Failures
 
 **Symptoms:**
 ```
-[ERROR] Failed to query Project Groups from Black Duck
-HTTP 401: Unauthorized
-```
-
-**Diagnosis:**
-```bash
-# Check secret contents
-kubectl get secret blackduck-creds -n bd-selfscan-system -o yaml | base64 -d
-
-# Test credentials manually
-curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/projects"
-```
-
-**Solutions:**
-1. **Update credentials:**
-   ```bash
-   kubectl delete secret blackduck-creds -n bd-selfscan-system
-   kubectl create secret generic blackduck-creds \
-     --namespace bd-selfscan-system \
-     --from-literal=url="https://your-blackduck-instance.com" \
-     --from-literal=token="your-new-api-token"
-   ```
-
-2. **Verify API token permissions:**
-   - Log into Black Duck UI
-   - Check token has project creation permissions
-   - Ensure token is not expired
-
-## Scanning Issues
-
-### Issue: No Container Images Found
-
-**Symptoms:**
-```
-[WARNING] No container images found in namespace 'app' with labels 'app=myapp'
-[ERROR] No container images found to scan
-```
-
-**Diagnosis:**
-```bash
-# Check if pods exist
-kubectl get pods -n app -l "app=myapp"
-
-# Check pod specifications
-kubectl get pods -n app -l "app=myapp" -o jsonpath='{.items[*].spec.containers[*].image}' | tr ' ' '\n'
-
-# Look for init containers too
-kubectl get pods -n app -l "app=myapp" -o jsonpath='{.items[*].spec.initContainers[*].image}' | tr ' ' '\n'
-```
-
-**Solutions:**
-1. **Verify pods are running:**
-   ```bash
-   kubectl get pods -n app -l "app=myapp" -o wide
-   ```
-
-2. **Check different label selectors:**
-   ```bash
-   # Try broader selectors
-   kubectl get pods -n app --show-labels
-   kubectl get pods -n app -l "app.kubernetes.io/name=myapp"
-   ```
-
-3. **Scan terminated pods:**
-   ```bash
-   # BD SelfScan can scan images from pod specs even if pods are not running
-   kubectl get pods -n app -l "app=myapp" --field-selector=status.phase=Succeeded
-   ```
-
-### Issue: Container Image Download Failed
-
-**Symptoms:**
-```
-[ERROR] Failed to download: registry.company.com/myapp:v1.0.0
-Error: pull access denied for registry.company.com/myapp
+[ERROR] Failed to download image: registry.company.com/app:v1.0.0
+[ERROR] skopeo copy failed with exit code 1
 ```
 
 **Diagnosis:**
 ```bash
 # Test image access manually
-skopeo inspect docker://registry.company.com/myapp:v1.0.0
+skopeo inspect docker://registry.company.com/app:v1.0.0
 
-# Check if authentication is needed
-docker pull registry.company.com/myapp:v1.0.0
+# Check registry credentials
+kubectl get secret registry-creds -n bd-selfscan-system -o yaml
 
-# Verify image exists
-curl -I https://registry.company.com/v2/myapp/manifests/v1.0.0
+# Test from scanner pod
+kubectl exec -it $POD_NAME -n bd-selfscan-system -- \
+  skopeo inspect docker://registry.company.com/app:v1.0.0
 ```
 
 **Solutions:**
-1. **Configure registry authentication:**
-   ```yaml
-   # In values.yaml
-   registry:
-     imagePullSecrets:
-       - name: "private-registry-secret"
-   ```
 
-2. **Create registry secret:**
+1. **Registry Authentication:**
    ```bash
-   kubectl create secret docker-registry private-registry-secret \
+   # Create registry credentials
+   kubectl create secret docker-registry registry-creds \
      --docker-server=registry.company.com \
-     --docker-username=your-username \
-     --docker-password=your-password \
-     --namespace=bd-selfscan-system
+     --docker-username=username \
+     --docker-password=password \
+     -n bd-selfscan-system
+   
+   # Configure scanner to use credentials
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set scanner.imagePullSecrets[0].name=registry-creds
    ```
 
-3. **Use public mirrors if available:**
+2. **Network Connectivity:**
    ```bash
-   # Check if public mirror exists
-   skopeo inspect docker://docker.io/library/ubuntu:22.04
+   # Test network access from cluster
+   kubectl run test-pod --image=curlimages/curl --rm -it -- \
+     curl -I https://registry.company.com
    ```
 
-### Issue: Scan Timeout
+3. **Increase Timeouts:**
+   ```bash
+   # Increase download timeouts for large images
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set scanning.imageDownloadTimeout=1800 \
+     --set scanning.imageDownloadRetries=5
+   ```
+
+## Phase 2: Automated Scanning Issues
+
+### Issue: Controller Not Starting
 
 **Symptoms:**
 ```
-[ERROR] Scan failed for registry.company.com/large-app:v2.0.0 (1800s)
-Command timed out after 1800 seconds
+deployment "bd-selfscan-controller" not available
+CrashLoopBackOff on controller pod
 ```
 
 **Diagnosis:**
 ```bash
-# Check container image size
-skopeo inspect docker://registry.company.com/large-app:v2.0.0 | jq '.config.size'
+# Check controller deployment
+kubectl get deployment bd-selfscan-controller -n bd-selfscan-system
 
-# Check resource usage during scan
-kubectl top pods -n bd-selfscan-system -l app.kubernetes.io/component=scanner
+# Check controller pod status
+kubectl get pods -n bd-selfscan-system -l app.kubernetes.io/component=controller
+
+# Check controller logs
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller --tail=100
+
+# Check controller events
+kubectl describe deployment bd-selfscan-controller -n bd-selfscan-system
 ```
 
 **Solutions:**
-1. **Increase scan timeout:**
-   ```yaml
-   # In values.yaml
-   scanning:
-     scanTimeout: 7200  # 2 hours
-     imageDownloadTimeout: 1800  # 30 minutes
+
+1. **Configuration Issues:**
+   ```bash
+   # Check if Phase 2 is enabled
+   helm get values bd-selfscan | grep -A 5 automated
+   
+   # Enable Phase 2
+   helm upgrade bd-selfscan ./bd-selfscan --set automated.enabled=true
    ```
 
-2. **Increase resources:**
-   ```yaml
-   # In values.yaml
-   scanner:
-     resources:
-       limits:
-         memory: "32Gi"
-         cpu: "8"
-         ephemeralStorage: "200Gi"
+2. **Resource Constraints:**
+   ```bash
+   # Check resource limits
+   kubectl describe pod <controller-pod> -n bd-selfscan-system | grep -A 10 Limits
+   
+   # Increase controller resources
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set automated.controller.resources.limits.memory=1Gi \
+     --set automated.controller.resources.limits.cpu=500m
    ```
 
-3. **Optimize container images:**
-   - Use multi-stage builds to reduce image size
-   - Minimize layers in container images
-   - Use .dockerignore to exclude unnecessary files
+3. **Python Dependencies:**
+   ```bash
+   # Check Python import errors in logs
+   kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep -i "importerror\|modulenotfounderror"
+   
+   # Verify container image version
+   kubectl get deployment bd-selfscan-controller -n bd-selfscan-system -o jsonpath='{.spec.template.spec.containers[0].image}'
+   ```
+
+### Issue: Controller Health Checks Failing
+
+**Symptoms:**
+```
+Readiness probe failed: Get "http://10.244.0.10:8081/ready": connection refused
+Liveness probe failed: Get "http://10.244.0.10:8081/health": connection refused
+```
+
+**Diagnosis:**
+```bash
+# Check health endpoints directly
+kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8081:8081 &
+curl http://localhost:8081/health
+curl http://localhost:8081/ready
+
+# Check controller service
+kubectl get svc bd-selfscan-controller -n bd-selfscan-system
+kubectl describe svc bd-selfscan-controller -n bd-selfscan-system
+```
+
+**Solutions:**
+
+1. **Port Configuration:**
+   ```bash
+   # Verify health port configuration
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set automated.controller.healthPort=8081
+   ```
+
+2. **Security Context Issues:**
+   ```bash
+   # Check if security context prevents port binding
+   kubectl get pod <controller-pod> -n bd-selfscan-system -o yaml | grep -A 10 securityContext
+   ```
+
+3. **Network Policies:**
+   ```bash
+   # Check if network policies block health checks
+   kubectl get networkpolicy -n bd-selfscan-system
+   
+   # Temporarily disable for testing
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set networkPolicy.enabled=false
+   ```
+
+### Issue: Events Not Triggering Scans
+
+**Symptoms:**
+```
+Deployments are created/updated but no scan jobs are triggered
+Controller is running but not processing events
+```
+
+**Diagnosis:**
+```bash
+# Check controller event processing logs
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep -i event
+
+# Test with a deployment event
+kubectl create deployment nginx-test --image=nginx:latest -n default
+kubectl label deployment nginx-test app=nginx-test -n default
+
+# Check if application is configured for auto-scanning
+kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml | grep -A 10 nginx-test
+```
+
+**Solutions:**
+
+1. **Application Configuration:**
+   ```yaml
+   # Ensure scanOnDeploy is enabled in configs/applications.yaml
+   applications:
+     - name: "Test Application"
+       namespace: "default"
+       labelSelector: "app=nginx-test"
+       projectGroup: "Test Group"
+       scanOnDeploy: true  # Must be true for auto-scanning
+   ```
+
+2. **Controller Permissions:**
+   ```bash
+   # Verify controller can watch deployments
+   kubectl auth can-i watch deployments --as=system:serviceaccount:bd-selfscan-system:bd-selfscan
+   
+   # Check ClusterRole permissions
+   kubectl get clusterrole bd-selfscan -o yaml | grep -A 5 deployments
+   ```
+
+3. **Event Filtering:**
+   ```bash
+   # Check if events are being filtered out
+   kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep -i "filtered\|excluded\|ignored"
+   ```
+
+### Issue: Metrics Not Available
+
+**Symptoms:**
+```
+Prometheus metrics endpoint not accessible
+Metrics endpoint returns 404 or connection refused
+```
+
+**Diagnosis:**
+```bash
+# Test metrics endpoint
+kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8080:8080 &
+curl http://localhost:8080/metrics
+
+# Check metrics configuration
+helm get values bd-selfscan | grep -A 10 monitoring
+
+# Check service monitor (if using Prometheus Operator)
+kubectl get servicemonitor -n bd-selfscan-system
+```
+
+**Solutions:**
+
+1. **Enable Monitoring:**
+   ```bash
+   # Enable Prometheus metrics
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set monitoring.prometheus.enabled=true \
+     --set monitoring.serviceMonitor.enabled=true
+   ```
+
+2. **Check Metrics Port:**
+   ```bash
+   # Verify metrics port configuration
+   kubectl get svc bd-selfscan-controller -n bd-selfscan-system -o yaml | grep -A 5 ports
+   ```
+
+3. **ServiceMonitor Configuration:**
+   ```yaml
+   # Check ServiceMonitor labels match Prometheus selector
+   kubectl get servicemonitor bd-selfscan -n bd-selfscan-system -o yaml
+   ```
+
+## Configuration Issues
+
+### Issue: Application Configuration Not Loading
+
+**Symptoms:**
+```
+[ERROR] Application 'My App' not found in configuration
+[WARNING] Configuration file could not be parsed
+```
+
+**Diagnosis:**
+```bash
+# Check ConfigMap exists and has data
+kubectl get configmap bd-selfscan-applications -n bd-selfscan-system
+kubectl describe configmap bd-selfscan-applications -n bd-selfscan-system
+
+# Validate YAML syntax
+kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml | yq eval '.data."applications.yaml"' - | yq eval '.'
+```
+
+**Solutions:**
+
+1. **Fix YAML Syntax:**
+   ```bash
+   # Validate local file
+   yq eval '.' configs/applications.yaml
+   
+   # Apply corrected configuration
+   kubectl create configmap bd-selfscan-applications \
+     --from-file=applications.yaml=configs/applications.yaml \
+     -n bd-selfscan-system \
+     --dry-run=client -o yaml | kubectl apply -f -
+   ```
+
+2. **Trigger Configuration Reload (Phase 2):**
+   ```bash
+   # Restart controller to reload config
+   kubectl rollout restart deployment/bd-selfscan-controller -n bd-selfscan-system
+   
+   # Check reload logs
+   kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep -i "configuration\|reload"
+   ```
+
+### Issue: Helm Values Not Applied
+
+**Symptoms:**
+```
+Configuration changes not taking effect
+Resources not updated after helm upgrade
+```
+
+**Diagnosis:**
+```bash
+# Check current values
+helm get values bd-selfscan
+
+# Compare with desired values
+helm diff upgrade bd-selfscan ./bd-selfscan --values custom-values.yaml
+
+# Check deployment status
+kubectl rollout status deployment/bd-selfscan-controller -n bd-selfscan-system
+```
+
+**Solutions:**
+
+1. **Force Upgrade:**
+   ```bash
+   # Force recreation of resources
+   helm upgrade bd-selfscan ./bd-selfscan --force
+   
+   # Or with specific values
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --values custom-values.yaml \
+     --force
+   ```
+
+2. **Check Template Rendering:**
+   ```bash
+   # Debug template rendering
+   helm template bd-selfscan ./bd-selfscan --debug --values custom-values.yaml
+   ```
 
 ## Black Duck Integration Issues
 
-### Issue: Project Group Creation Failed
+### Issue: Black Duck API Connection Failures
 
 **Symptoms:**
 ```
-[ERROR] Failed to create Project Group 'My Application'
-HTTP 403: Forbidden
+[ERROR] Failed to connect to Black Duck API
+[ERROR] SSL certificate verification failed
+[ERROR] Authentication failed: Invalid token
 ```
 
 **Diagnosis:**
 ```bash
-# Test API token permissions
-curl -k -X POST \
-  -H "Authorization: Bearer $BD_TOKEN" \
-  -H "Content-Type: application/vnd.blackducksoftware.project-detail-5+json" \
-  -d '{"name":"Test Group"}' \
+# Test Black Duck connectivity
+BD_URL=$(kubectl get secret blackduck-creds -n bd-selfscan-system -o jsonpath='{.data.url}' | base64 -d)
+BD_TOKEN=$(kubectl get secret blackduck-creds -n bd-selfscan-system -o jsonpath='{.data.token}' | base64 -d)
+
+curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/current-user"
+
+# Check secret contents
+kubectl get secret blackduck-creds -n bd-selfscan-system -o yaml
+```
+
+**Solutions:**
+
+1. **SSL Certificate Issues:**
+   ```bash
+   # Enable certificate trust
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set blackduck.trustCert=true
+   
+   # Or test connectivity
+   curl -k "$BD_URL/api/current-user"
+   ```
+
+2. **Token Authentication:**
+   ```bash
+   # Recreate secret with correct token
+   kubectl delete secret blackduck-creds -n bd-selfscan-system
+   kubectl create secret generic blackduck-creds \
+     --from-literal=url="https://your-blackduck-server.com" \
+     --from-literal=token="your-valid-api-token" \
+     -n bd-selfscan-system
+   ```
+
+3. **Network Connectivity:**
+   ```bash
+   # Test from scanner pod
+   kubectl run test-pod --image=curlimages/curl --rm -it -- \
+     curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/current-user"
+   ```
+
+### Issue: Project Group Creation Failures
+
+**Symptoms:**
+```
+[ERROR] Failed to create Project Group 'My Project Group'
+[ERROR] Insufficient permissions to create project group
+```
+
+**Diagnosis:**
+```bash
+# Check Black Duck user permissions
+curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/current-user"
+
+# Test project group creation manually
+curl -k -X POST -H "Authorization: Bearer $BD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Test Group","description":"Test group creation"}' \
   "$BD_URL/api/project-groups"
 ```
 
 **Solutions:**
-1. **Check API token permissions:**
-   - Ensure token has "Project Creator" role
-   - Verify token is not restricted to specific projects
 
-2. **Use existing Project Group:**
-   ```yaml
-   # In configs/applications.yaml
-   applications:
-     - name: "My App"
-       projectGroup: "Existing Project Group"  # Use existing group
-   ```
+1. **Check Token Permissions:**
+   - Verify API token has "Project Creator" role in Black Duck
+   - Ensure token has not expired
+   - Check rate limiting
 
-### Issue: Policy Violations Not Blocking
-
-**Symptoms:**
-```
-[INFO] Policy violations found but scan marked as successful
-```
-
-**Diagnosis:**
-```bash
-# Check Black Duck policy configuration
-curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/policy-rules"
-
-# Verify policy assignment to project
-curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/projects/PROJECT_ID/policy-status"
-```
-
-**Solutions:**
-1. **Configure policy fail severities:**
-   ```yaml
-   # In values.yaml
-   scanning:
-     policyFailSeverities: "CRITICAL,BLOCKER,MAJOR"
-   ```
-
-2. **Assign policies in Black Duck:**
-   - Log into Black Duck UI
-   - Navigate to project settings
-   - Assign appropriate policies
-
-### Issue: Duplicate Projects Created
-
-**Symptoms:**
-```
-Multiple projects with similar names found in Black Duck
-```
-
-**Diagnosis:**
-```bash
-# List projects in Black Duck
-curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/projects" | jq '.items[].name'
-```
-
-**Solutions:**
-1. **Use consistent project naming:**
+2. **Manual Project Group Creation:**
    ```bash
-   # Ensure container names map consistently
-   # Check extract_project_info function in bdsc-container-scan.sh
+   # Create project group manually in Black Duck UI
+   # Then update configuration to use existing group
    ```
 
-2. **Clean up duplicate projects:**
-   - Log into Black Duck UI
-   - Manually merge or delete duplicate projects
+### Issue: Scan Upload Failures
+
+**Symptoms:**
+```
+[ERROR] Failed to upload scan results to Black Duck
+[ERROR] Scan timeout after 30 minutes
+[ERROR] Detect execution failed
+```
+
+**Diagnosis:**
+```bash
+# Check Synopsys Detect logs
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -A 20 -B 20 "DETECT"
+
+# Check Black Duck scan status
+# (Use Black Duck UI to check scan progress)
+
+# Check image size and complexity
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -i "image size\|layer\|components"
+```
+
+**Solutions:**
+
+1. **Increase Timeouts:**
+   ```bash
+   # Increase scan timeout for large images
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set scanning.scanTimeout=3600 \
+     --set scanner.timeouts.scan=7200
+   ```
+
+2. **Optimize Detect Settings:**
+   ```bash
+   # Reduce scan scope
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set scanning.snippetMatching=false \
+     --set scanning.uploadSource=false
+   ```
+
+3. **Resource Allocation:**
+   ```bash
+   # Increase JVM memory for Detect
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set scanner.detectJavaOpts="-Xmx8g"
+   ```
 
 ## Performance Issues
 
@@ -506,190 +816,534 @@ curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/projects" | jq '.items
 
 **Symptoms:**
 ```
-Scans taking longer than expected (>30 minutes per application)
+Scans taking longer than expected
+High memory usage during scans
+Timeout errors for large containers
 ```
 
 **Diagnosis:**
 ```bash
-# Monitor resource usage
-kubectl top pods -n bd-selfscan-system --sort-by=cpu
-kubectl top pods -n bd-selfscan-system --sort-by=memory
+# Check resource usage
+kubectl top pods -n bd-selfscan-system
 
-# Check I/O wait
-kubectl exec -it POD_NAME -- iostat 1 5
+# Check scan duration metrics (Phase 2)
+curl -s http://controller-service:8080/metrics | grep bd_selfscan_job_duration
 
-# Check network latency to Black Duck
-kubectl exec -it POD_NAME -- ping blackduck.company.com
+# Check job logs for timing information
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -E "\[INFO\].*took|duration|elapsed"
 ```
 
 **Solutions:**
-1. **Increase resources:**
-   ```yaml
-   scanner:
-     resources:
-       limits:
-         cpu: "8"      # More CPU for parallel processing
-         memory: "16Gi" # More memory for large scans
+
+1. **Increase Resources:**
+   ```bash
+   # Increase scanner resources
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set scanner.resources.limits.memory=32Gi \
+     --set scanner.resources.limits.cpu=16 \
+     --set scanner.resources.limits.ephemeralStorage=200Gi
    ```
 
-2. **Optimize concurrent operations:**
-   ```yaml
-   scanning:
-     maxConcurrentScans: 5
-     maxConcurrentDownloads: 3
+2. **Optimize Concurrency:**
+   ```bash
+   # Reduce concurrent operations for stability
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set scanning.maxConcurrentScans=3 \
+     --set scanning.maxConcurrentDownloads=2
    ```
 
-3. **Use faster storage:**
-   - Configure fast ephemeral storage
-   - Use SSD-backed storage classes
+3. **Node Selection:**
+   ```bash
+   # Use dedicated high-performance nodes
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set scanner.nodeSelector."node-type"="high-memory" \
+     --set scanner.tolerations[0].key="scanning-workload" \
+     --set scanner.tolerations[0].operator="Equal" \
+     --set scanner.tolerations[0].value="true" \
+     --set scanner.tolerations[0].effect="NoSchedule"
+   ```
 
 ### Issue: Resource Exhaustion
 
 **Symptoms:**
 ```
-Pod evicted due to ephemeral storage limit
+OOMKilled pods
+Node running out of disk space
+Too many scan jobs running simultaneously
 ```
 
 **Diagnosis:**
 ```bash
-# Check pod resource usage
-kubectl describe pod POD_NAME -n bd-selfscan-system
+# Check node resources
+kubectl describe nodes | grep -A 5 -B 5 "memory\|storage"
 
-# Check node resource availability
-kubectl describe nodes | grep -A 10 "Capacity\|Allocatable"
+# Check failed pods due to resources
+kubectl get pods -n bd-selfscan-system --field-selector=status.phase=Failed
+kubectl describe pod <failed-pod> -n bd-selfscan-system | grep -i oom
+
+# Check disk usage on nodes
+kubectl get pods -o wide -n bd-selfscan-system
 ```
 
 **Solutions:**
-1. **Increase ephemeral storage:**
-   ```yaml
-   scanner:
-     resources:
-       limits:
-         ephemeralStorage: "200Gi"
+
+1. **Resource Limits:**
+   ```bash
+   # Set appropriate resource limits
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set scanner.resources.requests.memory=4Gi \
+     --set scanner.resources.limits.memory=16Gi \
+     --set scanner.resources.requests.ephemeralStorage=20Gi \
+     --set scanner.resources.limits.ephemeralStorage=100Gi
    ```
 
-2. **Enable cleanup:**
-   ```yaml
-   scanning:
-     cleanupInterval: 1800  # Clean up every 30 minutes
+2. **Job Cleanup:**
+   ```bash
+   # Enable automatic job cleanup
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set scanner.job.ttlSecondsAfterFinished=3600 \
+     --set scanner.job.cleanup.enabled=true \
+     --set scanner.job.cleanup.keepSuccessful=3 \
+     --set scanner.job.cleanup.keepFailed=5
+   ```
+
+3. **Manual Cleanup:**
+   ```bash
+   # Clean up old completed jobs
+   kubectl delete jobs -n bd-selfscan-system --field-selector=status.successful=1
    
-   debug:
-     keepTempFiles: false   # Don't keep temporary files
+   # Clean up old failed jobs (keep some for debugging)
+   kubectl get jobs -n bd-selfscan-system --field-selector=status.successful=0 --sort-by=.metadata.creationTimestamp | head -n -5 | awk '{print $1}' | xargs kubectl delete job -n bd-selfscan-system
    ```
 
-## Debugging Tools
+## Security and Permissions Issues
 
-### Enable Debug Mode
+### Issue: Security Context Failures
 
-```yaml
-# In values.yaml
-debug:
-  enabled: true
-  logLevel: "DEBUG"
-  keepTempFiles: true
-  verboseLogging: true
+**Symptoms:**
+```
+container has runAsNonRoot and image will run as root
+Operation not permitted errors during scanning
+Permission denied accessing container images
 ```
 
-### Debug Commands
-
+**Diagnosis:**
 ```bash
-# Get detailed logs
-kubectl logs -n bd-selfscan-system JOB_POD_NAME --previous
+# Check pod security context
+kubectl get pod <scanner-pod> -n bd-selfscan-system -o yaml | grep -A 20 securityContext
 
-# Execute commands in scanner pod
-kubectl exec -it POD_NAME -n bd-selfscan-system -- /bin/bash
+# Check container capabilities
+kubectl describe pod <scanner-pod> -n bd-selfscan-system | grep -A 10 "Security Context"
 
-# Check scanner script directly
-kubectl exec -it POD_NAME -n bd-selfscan-system -- cat /app/scripts/scan-application.sh
-
-# Test Black Duck connectivity from pod
-kubectl exec -it POD_NAME -n bd-selfscan-system -- \
-  curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/projects"
-
-# Check available disk space
-kubectl exec -it POD_NAME -n bd-selfscan-system -- df -h
-
-# Monitor real-time resource usage
-kubectl exec -it POD_NAME -n bd-selfscan-system -- top
+# Test container operations
+kubectl exec -it <scanner-pod> -n bd-selfscan-system -- whoami
+kubectl exec -it <scanner-pod> -n bd-selfscan-system -- ls -la /var/run/
 ```
+
+**Solutions:**
+
+1. **Scanner Security Context (requires root):**
+   ```yaml
+   # Scanner needs root for container operations
+   scanner:
+     securityContext:
+       runAsUser: 0
+       runAsGroup: 0
+       allowPrivilegeEscalation: true
+       capabilities:
+         add: ["SYS_ADMIN"]
+   ```
+
+2. **Controller Security Context (restrictive):**
+   ```yaml
+   # Controller can run as non-root
+   automated:
+     controller:
+       securityContext:
+         runAsNonRoot: true
+         runAsUser: 65534
+         readOnlyRootFilesystem: true
+         allowPrivilegeEscalation: false
+         capabilities:
+           drop: ["ALL"]
+   ```
+
+### Issue: Network Policy Blocking
+
+**Symptoms:**
+```
+Connection refused to Black Duck API
+Unable to download container images
+DNS resolution failures
+```
+
+**Diagnosis:**
+```bash
+# Check network policies
+kubectl get networkpolicy -n bd-selfscan-system
+kubectl describe networkpolicy -n bd-selfscan-system
+
+# Test connectivity from pod
+kubectl exec -it <scanner-pod> -n bd-selfscan-system -- \
+  curl -v https://your-blackduck-server.com
+
+kubectl exec -it <scanner-pod> -n bd-selfscan-system -- \
+  nslookup your-blackduck-server.com
+```
+
+**Solutions:**
+
+1. **Disable Network Policies (temporary):**
+   ```bash
+   # Disable for testing
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set networkPolicy.enabled=false
+   ```
+
+2. **Configure Proper Egress Rules:**
+   ```yaml
+   networkPolicy:
+     enabled: true
+     egress:
+       - to: []  # Allow all egress
+         ports:
+           - protocol: TCP
+             port: 443
+           - protocol: TCP
+             port: 80
+           - protocol: UDP
+             port: 53  # DNS
+   ```
+
+## Monitoring and Metrics Issues
+
+### Issue: Prometheus Metrics Not Scraped
+
+**Symptoms:**
+```
+No metrics appearing in Prometheus
+ServiceMonitor not discovered
+Scrape target showing as down
+```
+
+**Diagnosis:**
+```bash
+# Check ServiceMonitor
+kubectl get servicemonitor bd-selfscan -n bd-selfscan-system -o yaml
+
+# Check Prometheus configuration
+kubectl get prometheus -o yaml | grep -A 10 serviceMonitorSelector
+
+# Test metrics endpoint manually
+kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8080:8080 &
+curl http://localhost:8080/metrics | head -20
+```
+
+**Solutions:**
+
+1. **Check ServiceMonitor Labels:**
+   ```bash
+   # Ensure ServiceMonitor has correct labels for Prometheus selector
+   kubectl label servicemonitor bd-selfscan -n bd-selfscan-system release=prometheus
+   ```
+
+2. **Enable Monitoring:**
+   ```bash
+   # Enable monitoring components
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set monitoring.prometheus.enabled=true \
+     --set monitoring.serviceMonitor.enabled=true \
+     --set monitoring.serviceMonitor.labels.release=prometheus
+   ```
+
+3. **Check Prometheus Configuration:**
+   ```yaml
+   # Verify Prometheus ServiceMonitor selector
+   spec:
+     serviceMonitorSelector:
+       matchLabels:
+         release: prometheus
+   ```
+
+### Issue: Grafana Dashboard Not Working
+
+**Symptoms:**
+```
+Dashboard shows no data
+Queries returning empty results
+Dashboard import errors
+```
+
+**Diagnosis:**
+```bash
+# Check if metrics are available in Prometheus
+# Query: bd_selfscan_jobs_created_total
+
+# Test query manually
+curl -G 'http://prometheus:9090/api/v1/query' \
+  --data-urlencode 'query=bd_selfscan_jobs_created_total'
+
+# Check time range in Grafana
+```
+
+**Solutions:**
+
+1. **Import Dashboard:**
+   ```bash
+   # Import from provided dashboard JSON
+   # (Dashboard ID TBD - will be provided in future release)
+   ```
+
+2. **Basic Query Examples:**
+   ```promql
+   # Job creation rate
+   rate(bd_selfscan_jobs_created_total[5m])
+   
+   # Job failure rate
+   rate(bd_selfscan_jobs_failed_total[5m])
+   
+   # Average scan duration
+   avg(bd_selfscan_job_duration_seconds)
+   
+   # Controller health
+   bd_selfscan_controller_healthy
+   ```
+
+## Common Error Messages
+
+### "No space left on device"
+
+**Cause:** Insufficient ephemeral storage for container image downloads and scanning.
+
+**Solution:**
+```bash
+# Increase ephemeral storage limits
+helm upgrade bd-selfscan ./bd-selfscan \
+  --set scanner.resources.limits.ephemeralStorage=200Gi
+
+# Clean up old job pods
+kubectl delete pods -n bd-selfscan-system --field-selector=status.phase=Succeeded
+```
+
+### "ImagePullBackOff"
+
+**Cause:** Cannot pull scanner container image.
+
+**Solution:**
+```bash
+# Check image name and tag
+kubectl get pod <pod-name> -n bd-selfscan-system -o yaml | grep image:
+
+# Test image pull manually
+docker pull ghcr.io/snps-steve/bd-selfscan/bd-selfscan:v1.1.0
+
+# Check image pull secrets
+kubectl get secret -n bd-selfscan-system | grep -i pull
+```
+
+### "Error: UPGRADE FAILED: cannot patch"
+
+**Cause:** Helm upgrade conflicts with existing resources.
+
+**Solution:**
+```bash
+# Force upgrade
+helm upgrade bd-selfscan ./bd-selfscan --force
+
+# Or delete and reinstall
+helm uninstall bd-selfscan
+helm install bd-selfscan ./bd-selfscan
+```
+
+### "Failed to parse applications.yaml"
+
+**Cause:** Invalid YAML syntax in application configuration.
+
+**Solution:**
+```bash
+# Validate YAML syntax
+yq eval '.' configs/applications.yaml
+
+# Check for common issues:
+# - Incorrect indentation
+# - Missing quotes around values with special characters
+# - Invalid boolean values (use true/false, not True/False)
+```
+
+### "Black Duck API rate limit exceeded"
+
+**Cause:** Too many concurrent API calls to Black Duck.
+
+**Solution:**
+```bash
+# Reduce concurrent scans
+helm upgrade bd-selfscan ./bd-selfscan \
+  --set scanning.maxConcurrentScans=2 \
+  --set blackduck.api.requestsPerMinute=15
+
+# Add delays between scans
+helm upgrade bd-selfscan ./bd-selfscan \
+  --set blackduck.api.retryBackoff=10
+```
+
+## Debugging Tools and Commands
 
 ### Log Analysis
 
 ```bash
+# Get logs from all scanner pods
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner --tail=100
+
+# Get logs from controller (Phase 2)
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller --tail=100
+
+# Follow logs in real-time
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner -f
+
 # Search for specific errors
 kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner | grep -i error
 
-# Find timeout issues
-kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner | grep -i timeout
+# Get logs from specific job
+kubectl logs -n bd-selfscan-system job/<job-name>
 
-# Check image download progress
-kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner | grep -i download
-
-# Monitor scan progress
-kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner | grep -E "(Starting|Completed|Failed)"
+# Get previous container logs (if pod restarted)
+kubectl logs -n bd-selfscan-system <pod-name> --previous
 ```
 
-## Common Error Messages
+### Resource Monitoring
 
-### Container Image Issues
+```bash
+# Monitor resource usage
+watch kubectl top pods -n bd-selfscan-system
 
-| Error Message | Cause | Solution |
-|---------------|--------|----------|
-| `pull access denied` | Registry authentication required | Configure `imagePullSecrets` |
-| `manifest unknown` | Image tag doesn't exist | Verify image name and tag |
-| `repository does not exist` | Invalid repository name | Check image repository path |
+# Check node resources
+kubectl describe nodes | grep -A 5 -B 5 "Allocated resources"
 
-### Black Duck API Issues
+# Monitor storage usage
+kubectl get pv | grep bd-selfscan
 
-| Error Message | Cause | Solution |
-|---------------|--------|----------|
-| `HTTP 401: Unauthorized` | Invalid API token | Update Black Duck credentials |
-| `HTTP 403: Forbidden` | Insufficient permissions | Check token role assignments |
-| `HTTP 404: Not Found` | Invalid Black Duck URL | Verify Black Duck server URL |
-| `Connection refused` | Network connectivity issue | Check network policies and firewall |
+# Check for resource constraints
+kubectl describe pod <pod-name> -n bd-selfscan-system | grep -A 10 "Limits\|Requests"
+```
 
-### Kubernetes Issues
+### Event Monitoring
 
-| Error Message | Cause | Solution |
-|---------------|--------|----------|
-| `pods is forbidden` | RBAC permissions missing | Check ClusterRole and binding |
-| `namespace not found` | Invalid namespace | Verify namespace exists |
-| `no matches for kind` | API version mismatch | Update Kubernetes/Helm versions |
+```bash
+# Watch events in real-time
+kubectl get events -n bd-selfscan-system --watch
 
-### Resource Issues
+# Get events sorted by time
+kubectl get events -n bd-selfscan-system --sort-by=.metadata.creationTimestamp
 
-| Error Message | Cause | Solution |
-|---------------|--------|----------|
-| `Pod evicted` | Resource limits exceeded | Increase resource limits |
-| `disk pressure` | Insufficient storage | Increase ephemeral storage |
-| `memory pressure` | Insufficient memory | Increase memory limits |
+# Filter for warning/error events
+kubectl get events -n bd-selfscan-system --field-selector type=Warning
+kubectl get events -n bd-selfscan-system --field-selector type=Error
+```
 
-## Getting Help
+### Debug Mode
 
-### Support Information
+```bash
+# Enable debug mode for detailed logging
+helm upgrade bd-selfscan ./bd-selfscan \
+  --set debug.enabled=true \
+  --set debug.logLevel=DEBUG \
+  --set debug.keepTempFiles=true
 
-1. **Check documentation:**
-   - [CONFIGURATION.md](CONFIGURATION.md)
-   - [INSTALL.md](INSTALL.md)
-   - [API.md](API.md)
+# Run single application scan in debug mode
+helm install bd-debug-scan ./bd-selfscan \
+  --set scanTarget="My Application" \
+  --set debug.enabled=true
+```
 
-2. **Collect diagnostic information:**
+### Configuration Debugging
+
+```bash
+# Dump current configuration
+kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml
+
+# Test label selectors
+NAMESPACE="myapp"
+LABEL_SELECTOR="app=myapp"
+kubectl get pods -n "$NAMESPACE" -l "$LABEL_SELECTOR" --show-labels
+
+# Validate Helm templates
+helm template bd-selfscan ./bd-selfscan --debug
+
+# Check applied values
+helm get values bd-selfscan
+```
+
+### Network Debugging
+
+```bash
+# Test connectivity from scanner pod
+kubectl run debug-pod --image=nicolaka/netshoot --rm -it -- bash
+
+# Test Black Duck connectivity
+kubectl exec -it debug-pod -- curl -k https://your-blackduck-server.com
+
+# Test DNS resolution
+kubectl exec -it debug-pod -- nslookup your-blackduck-server.com
+
+# Test registry connectivity
+kubectl exec -it debug-pod -- curl -I https://ghcr.io
+```
+
+---
+
+## Getting Additional Help
+
+### Support Resources
+
+- **📖 Documentation**: [README.md](../README.md) | [Installation](INSTALL.md) | [Configuration](CONFIGURATION.md)
+- **🏗️ Architecture**: [System Architecture](ARCHITECTURE.md) - Technical design and components
+- **🗺️ Roadmap**: [Implementation Status](ROADMAP.md) - Current features and future plans
+- **📝 Changelog**: [Version History](CHANGELOG.md) - Release notes and updates
+- **🔧 API Reference**: [API Documentation](API.md) - Phase 2 controller APIs
+
+### Community Support
+
+- **🐛 Issues**: [GitHub Issues](https://github.com/snps-steve/bd-selfscan/issues) - Bug reports and feature requests
+- **💬 Discussions**: [GitHub Discussions](https://github.com/snps-steve/bd-selfscan/discussions) - Community help and Q&A
+- **📚 Wiki**: [Project Wiki](https://github.com/snps-steve/bd-selfscan/wiki) - Additional documentation
+
+### Escalation Process
+
+1. **Check this troubleshooting guide** for common issues
+2. **Search existing GitHub issues** for similar problems
+3. **Enable debug mode** and collect detailed logs
+4. **Create GitHub issue** with:
+   - Detailed problem description
+   - Steps to reproduce
+   - Environment information (Kubernetes version, Helm version, etc.)
+   - Debug logs and configuration
+   - Expected vs. actual behavior
+
+### Emergency Support
+
+For critical production issues:
+
+1. **Disable automated scanning** temporarily:
    ```bash
-   # Run the health check script above
-   # Collect pod logs
-   kubectl logs -n bd-selfscan-system --all-containers=true --previous
-   
-   # Export configuration
-   kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml
-   
-   # Check resource usage
-   kubectl top nodes
-   kubectl top pods -n bd-selfscan-system
+   helm upgrade bd-selfscan ./bd-selfscan --set automated.enabled=false
    ```
 
-3. **Open support ticket with:**
-   - BD SelfScan version
-   - Kubernetes version
-   - Complete error logs
-   - Configuration files (remove sensitive data)
-   - Resource usage information
+2. **Clean up failed resources**:
+   ```bash
+   kubectl delete jobs -n bd-selfscan-system --field-selector=status.successful=0
+   kubectl delete pods -n bd-selfscan-system --field-selector=status.phase=Failed
+   ```
+
+3. **Rollback to previous version** if needed:
+   ```bash
+   helm rollback bd-selfscan
+   ```
+
+---
+
+**📊 Implementation Status:**
+- **Phase 1**: ✅ Production Ready (100% complete)
+- **Phase 2**: 🚀 85% Complete (Beta phase with controller, metrics, health endpoints)
+
+**🔗 For configuration help, see [CONFIGURATION.md](CONFIGURATION.md)**
+**🚀 For installation guidance, see [INSTALL.md](INSTALL.md)**

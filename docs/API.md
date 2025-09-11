@@ -1,30 +1,87 @@
 # BD SelfScan API Reference
 
-This document describes the APIs, webhooks, and controller interfaces for BD SelfScan Phase 2 automated scanning.
+This document describes the APIs, webhooks, and controller interfaces for BD SelfScan.
+
+## 📋 Implementation Status
+
+| Feature | Phase | Status | Description |
+|---------|-------|--------|-------------|
+| **On-Demand Scanning** | 1 | ✅ **COMPLETE** | Helm-based job execution, manual scans |
+| **Controller API** | 2 | 🚧 **PLANNED** | REST API for scan management |
+| **Webhook Endpoints** | 2 | 🚧 **PLANNED** | Automated deployment scanning |
+| **Event-Driven Scanning** | 2 | 🚧 **PLANNED** | Kubernetes event watching |
+| **Metrics Endpoint** | 2 | 🚧 **PLANNED** | Prometheus metrics collection |
+
+> **Note**: Phase 2 features are currently in development. This documentation serves as both specification and implementation guide.
 
 ## 📋 Table of Contents
 
-- [Controller API](#controller-api)
-- [Webhook Endpoints](#webhook-endpoints)
-- [Prometheus Metrics](#prometheus-metrics)
-- [Health Check Endpoints](#health-check-endpoints)
-- [Configuration API](#configuration-api)
-- [Event API](#event-api)
+- [Current Implementation (Phase 1)](#current-implementation-phase-1)
+- [Planned Implementation (Phase 2)](#planned-implementation-phase-2)
+  - [Controller API](#controller-api)
+  - [Webhook Endpoints](#webhook-endpoints)
+  - [Prometheus Metrics](#prometheus-metrics)
+  - [Health Check Endpoints](#health-check-endpoints)
+  - [Configuration API](#configuration-api)
+  - [Event API](#event-api)
+- [Client Libraries](#client-libraries)
+- [Migration Guide](#migration-guide)
+
+## Current Implementation (Phase 1)
+
+### Helm-Based Job API
+
+Currently implemented scanning uses Kubernetes Jobs triggered via Helm:
+
+#### Single Application Scan
+```bash
+# Trigger scan via Helm
+helm install bd-scan ./bd-selfscan \
+  --set scanTarget="Black Duck SCA" \
+  --namespace bd-selfscan-system
+
+# Monitor scan progress
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner -f
+
+# Check scan completion
+kubectl get jobs -n bd-selfscan-system
+```
+
+#### Bulk Application Scan
+```bash
+# Scan all configured applications
+helm install bd-scan-all ./bd-selfscan --namespace bd-selfscan-system
+
+# Parallel scanning via script
+./scripts/scan-all-applications.sh --parallel 3 --yes
+```
+
+#### Available Commands
+- `./scripts/scan-application.sh "App Name"` - Scan single application
+- `./scripts/scan-all-applications.sh` - Scan all applications with options
+- `./scripts/bdsc-container-scan.sh` - Core scanning engine
+
+---
+
+## Planned Implementation (Phase 2)
+
+> ⚠️ **Development Status**: The following APIs are planned for Phase 2 implementation.
 
 ## Controller API
 
-The BD SelfScan controller exposes several HTTP endpoints for management and monitoring during Phase 2 operations.
+The BD SelfScan controller will expose HTTP endpoints for management and monitoring during Phase 2 operations.
 
 ### Base URL
 
-The controller API is available at:
 ```
 http://bd-selfscan-controller.bd-selfscan-system.svc.cluster.local:8080
 ```
 
 ### Authentication
 
-The controller API uses Kubernetes service account authentication for internal communication and optional API keys for external access.
+**Planned Authentication Methods**:
+- Kubernetes service account tokens (internal)
+- Optional API keys (external access)
 
 ```yaml
 # Service account token authentication
@@ -38,9 +95,11 @@ X-API-Key: <api-key>
 
 ### Deployment Webhook
 
+**Status**: 🚧 **PLANNED**
+
 **Endpoint:** `POST /webhooks/deployment`
 
-Receives Kubernetes deployment events and triggers container scans based on configuration.
+Will receive Kubernetes deployment events and trigger container scans based on configuration.
 
 **Request Headers:**
 ```
@@ -100,51 +159,29 @@ Authorization: Bearer <token>
 
 ### Pod Webhook (Optional)
 
+**Status**: 🚧 **PLANNED**
+
 **Endpoint:** `POST /webhooks/pod`
 
-Receives Kubernetes pod events for fine-grained scan triggering.
-
-**Request Body:**
-```json
-{
-  "type": "ADDED" | "MODIFIED" | "DELETED",
-  "object": {
-    "apiVersion": "v1",
-    "kind": "Pod",
-    "metadata": {
-      "name": "example-app-pod",
-      "namespace": "default",
-      "labels": {
-        "app": "example"
-      }
-    },
-    "spec": {
-      "containers": [
-        {
-          "name": "app",
-          "image": "nginx:1.21"
-        }
-      ]
-    }
-  }
-}
-```
+Will receive Kubernetes pod events for fine-grained scan triggering.
 
 ## Health Check Endpoints
 
-### Liveness Probe
+### Health Check
+
+**Status**: 🚧 **PLANNED**
 
 **Endpoint:** `GET /health`
 
-Checks if the controller is running and responsive.
+Controller health status endpoint.
 
 **Response:**
 ```json
 {
   "status": "healthy",
-  "timestamp": "2024-08-26T14:30:22Z",
   "version": "1.0.0",
-  "uptime": 3600
+  "timestamp": "2024-08-26T14:30:22Z",
+  "uptime": "2h15m30s"
 }
 ```
 
@@ -152,11 +189,13 @@ Checks if the controller is running and responsive.
 - `200` - Controller is healthy
 - `503` - Controller is unhealthy
 
-### Readiness Probe
+### Readiness Check
+
+**Status**: 🚧 **PLANNED**
 
 **Endpoint:** `GET /ready`
 
-Checks if the controller is ready to accept requests.
+Controller readiness status for Kubernetes probes.
 
 **Response:**
 ```json
@@ -177,44 +216,42 @@ Checks if the controller is ready to accept requests.
 
 ## Prometheus Metrics
 
+**Status**: 🚧 **PLANNED**
+
 **Endpoint:** `GET /metrics`
 
-Provides Prometheus-compatible metrics for monitoring and alerting.
+Will provide Prometheus-compatible metrics for monitoring and alerting.
 
-### Available Metrics
+### Planned Metrics
+
+Based on the controller implementation specification:
 
 #### Counter Metrics
 
 ```prometheus
+# Total number of deployment events processed
+bd_selfscan_deployment_events_total{namespace="default", application="app-name", event_type="ADDED"}
+
 # Total number of scan jobs created
-bd_selfscan_jobs_created_total{application="app-name", namespace="default", tier="2"}
+bd_selfscan_jobs_created_total{namespace="default", application="app-name"}
 
 # Total number of failed scan job creations  
-bd_selfscan_jobs_failed_total{application="app-name", namespace="default", error_type="timeout"}
+bd_selfscan_jobs_failed_total{namespace="default", application="app-name", reason="timeout"}
 
 # Total number of policy violations found
-bd_selfscan_policy_violations_total{application="app-name", severity="CRITICAL", namespace="default"}
-
-# Total number of webhook events received
-bd_selfscan_webhook_events_total{event_type="deployment", action="ADDED"}
-
-# Total number of webhook processing errors
-bd_selfscan_webhook_errors_total{event_type="deployment", error_type="invalid_payload"}
+bd_selfscan_policy_violations_total{namespace="default", application="app-name", severity="CRITICAL"}
 ```
 
 #### Gauge Metrics
 
 ```prometheus
 # Current number of active scan jobs
-bd_selfscan_active_jobs{namespace="default", tier="2"}
+bd_selfscan_active_jobs{namespace="default"}
 
 # Controller health status (1 = healthy, 0 = unhealthy)
 bd_selfscan_controller_healthy
 
-# Number of applications configured for scanning
-bd_selfscan_configured_applications
-
-# Current controller uptime in seconds
+# Controller uptime in seconds
 bd_selfscan_controller_uptime_seconds
 ```
 
@@ -222,13 +259,7 @@ bd_selfscan_controller_uptime_seconds
 
 ```prometheus
 # Duration of scan jobs
-bd_selfscan_job_duration_seconds{application="app-name", namespace="default", status="success"}
-
-# Webhook processing time
-bd_selfscan_webhook_processing_duration_seconds{event_type="deployment"}
-
-# Time to complete application discovery
-bd_selfscan_discovery_duration_seconds{namespace="default"}
+bd_selfscan_job_duration_seconds{namespace="default", application="app-name"}
 ```
 
 ### Metric Labels
@@ -239,20 +270,19 @@ Common labels used across metrics:
 |-------|-------------|---------------|
 | `application` | Application name from configuration | `"Black Duck SCA"`, `"Payment API"` |
 | `namespace` | Kubernetes namespace | `"default"`, `"production"` |
-| `tier` | Project tier | `"1"`, `"2"`, `"3"`, `"4"` |
-| `status` | Job completion status | `"success"`, `"failed"`, `"timeout"` |
-| `event_type` | Kubernetes event type | `"deployment"`, `"pod"` |
-| `action` | Kubernetes action | `"ADDED"`, `"MODIFIED"`, `"DELETED"` |
+| `event_type` | Kubernetes event type | `"ADDED"`, `"MODIFIED"`, `"DELETED"` |
 | `severity` | Vulnerability severity | `"CRITICAL"`, `"HIGH"`, `"MEDIUM"` |
-| `error_type` | Error classification | `"timeout"`, `"auth"`, `"config"` |
+| `reason` | Error classification | `"timeout"`, `"auth"`, `"config"` |
 
 ## Configuration API
 
 ### Get Configuration
 
+**Status**: 🚧 **PLANNED**
+
 **Endpoint:** `GET /api/v1/config`
 
-Retrieves current controller configuration.
+Will retrieve current controller configuration.
 
 **Response:**
 ```json
@@ -278,9 +308,11 @@ Retrieves current controller configuration.
 
 ### Reload Configuration
 
+**Status**: 🚧 **PLANNED**
+
 **Endpoint:** `POST /api/v1/config/reload`
 
-Forces the controller to reload configuration from ConfigMaps.
+Will force the controller to reload configuration from ConfigMaps.
 
 **Response:**
 ```json
@@ -294,9 +326,11 @@ Forces the controller to reload configuration from ConfigMaps.
 
 ### Validate Configuration
 
+**Status**: 🚧 **PLANNED**
+
 **Endpoint:** `POST /api/v1/config/validate`
 
-Validates configuration without applying changes.
+Will validate configuration without applying changes.
 
 **Request Body:**
 ```json
@@ -304,7 +338,7 @@ Validates configuration without applying changes.
   "applications": [
     {
       "name": "Test App",
-      "namespace": "test",
+      "namespace": "test", 
       "labelSelector": "app=test",
       "projectGroup": "Test Group"
     }
@@ -327,9 +361,11 @@ Validates configuration without applying changes.
 
 ### List Scan Jobs
 
+**Status**: 🚧 **PLANNED**
+
 **Endpoint:** `GET /api/v1/scans`
 
-Lists recent scan jobs with filtering and pagination.
+Will list recent scan jobs with filtering and pagination.
 
 **Query Parameters:**
 - `application` - Filter by application name
@@ -370,9 +406,11 @@ GET /api/v1/scans?application=Black Duck SCA&status=success&limit=10
 
 ### Get Scan Details
 
+**Status**: 🚧 **PLANNED**
+
 **Endpoint:** `GET /api/v1/scans/{scanId}`
 
-Retrieves detailed information about a specific scan.
+Will retrieve detailed information about a specific scan.
 
 **Response:**
 ```json
@@ -413,9 +451,11 @@ Retrieves detailed information about a specific scan.
 
 ### Trigger Manual Scan
 
+**Status**: 🚧 **PLANNED**
+
 **Endpoint:** `POST /api/v1/scans`
 
-Manually triggers a scan for a specific application.
+Will manually trigger a scan for a specific application.
 
 **Request Body:**
 ```json
@@ -439,9 +479,11 @@ Manually triggers a scan for a specific application.
 
 ### Cancel Scan
 
+**Status**: 🚧 **PLANNED**
+
 **Endpoint:** `DELETE /api/v1/scans/{scanId}`
 
-Cancels a running scan job.
+Will cancel a running scan job.
 
 **Response:**
 ```json
@@ -456,9 +498,11 @@ Cancels a running scan job.
 
 ### Discover Applications
 
+**Status**: 🚧 **PLANNED**
+
 **Endpoint:** `GET /api/v1/discovery`
 
-Discovers applications in the cluster that match configured criteria.
+Will discover applications in the cluster that match configured criteria.
 
 **Query Parameters:**
 - `namespace` - Limit discovery to specific namespace
@@ -496,28 +540,11 @@ Discovers applications in the cluster that match configured criteria.
 }
 ```
 
-## Webhook Registration
-
-### Register Webhook
-
-**Endpoint:** `POST /api/v1/webhooks/register`
-
-Registers webhooks with Kubernetes API server for automated event processing.
-
-**Request Body:**
-```json
-{
-  "events": ["deployment", "pod"],
-  "namespaces": ["default", "production"],
-  "callback_url": "http://bd-selfscan-controller:8080/webhooks/deployment"
-}
-```
-
 ## Error Responses
 
 ### Standard Error Format
 
-All API endpoints return errors in a consistent format:
+All API endpoints will return errors in a consistent format:
 
 ```json
 {
@@ -546,9 +573,24 @@ All API endpoints return errors in a consistent format:
 | `INTERNAL_ERROR` | Server internal error | 500 |
 | `SERVICE_UNAVAILABLE` | Dependent service unavailable | 503 |
 
-## SDK and Client Libraries
+## Client Libraries
 
-### Python Client Example
+### Current Usage (Phase 1)
+
+```bash
+# Bash/Shell integration
+./scripts/scan-application.sh "Black Duck SCA"
+
+# Helm integration
+helm install bd-scan ./bd-selfscan --set scanTarget="App Name"
+
+# Kubernetes Job monitoring
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner -f
+```
+
+### Planned Python Client (Phase 2)
+
+**Status**: 🚧 **PLANNED**
 
 ```python
 import requests
@@ -590,13 +632,15 @@ class BDSelfScanClient:
         )
         return response.json()
 
-# Usage example
+# Usage example (when Phase 2 is implemented)
 client = BDSelfScanClient("http://bd-selfscan-controller:8080")
 result = client.trigger_scan("Black Duck SCA", priority="high")
 print(f"Scan ID: {result['scanId']}")
 ```
 
-### Bash Client Example
+### Planned Bash Client (Phase 2)
+
+**Status**: 🚧 **PLANNED**
 
 ```bash
 #!/bin/bash
@@ -638,15 +682,51 @@ list_scans() {
     curl -s -H "X-API-Key: $API_KEY" "$url"
 }
 
-# Usage examples
+# Usage examples (when Phase 2 is implemented)
 # trigger_scan "Black Duck SCA" "high"
 # get_scan_status "scan-uuid-123456"
 # list_scans "Black Duck SCA" "success"
 ```
 
+## Migration Guide
+
+### From Phase 1 to Phase 2
+
+When Phase 2 becomes available, migration will involve:
+
+1. **Enable Controller**:
+   ```bash
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set automated.enabled=true
+   ```
+
+2. **Configure Automated Scanning**:
+   ```yaml
+   # In configs/applications.yaml
+   applications:
+     - name: "Black Duck SCA"
+       scanOnDeploy: true  # Enable automatic scanning
+       scanSchedule: "0 2 * * 0"  # Weekly scheduled scans
+   ```
+
+3. **Monitor Migration**:
+   ```bash
+   # Check controller health
+   kubectl get pods -n bd-selfscan-system -l app.kubernetes.io/component=controller
+   
+   # View controller logs
+   kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller -f
+   
+   # Check metrics
+   kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8080:8080
+   curl http://localhost:8080/metrics
+   ```
+
 ## Rate Limiting
 
-The controller API implements rate limiting to prevent abuse:
+**Status**: 🚧 **PLANNED**
+
+The controller API will implement rate limiting to prevent abuse:
 
 - **Default Rate Limit:** 100 requests per minute per client
 - **Burst Limit:** 20 requests per 10-second window
@@ -659,11 +739,21 @@ The controller API implements rate limiting to prevent abuse:
 
 ## Versioning
 
-The API uses semantic versioning with backward compatibility guarantees:
+The API will use semantic versioning with backward compatibility guarantees:
 
-- **Current Version:** `v1`
+- **Current Version:** `v1` (planned)
 - **API Path:** `/api/v1/...`
 - **Backward Compatibility:** Maintained within major versions
 - **Deprecation Policy:** 6 months notice for breaking changes
 
-For more information, see [CONFIGURATION.md](CONFIGURATION.md) and [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+---
+
+## 📚 Additional Resources
+
+- **Main Documentation**: [../README.md](../README.md)
+- **Configuration Guide**: [../configs/README.md](../configs/README.md)
+- **Scripts Documentation**: [../scripts/README.md](../scripts/README.md)
+- **Installation Guide**: [../docs/INSTALL.md](../docs/INSTALL.md)
+- **Troubleshooting Guide**: [../docs/TROUBLESHOOTING.md](../docs/TROUBLESHOOTING.md)
+
+For questions about Phase 2 implementation timeline, please check the project roadmap or contact the DevSecOps team.
