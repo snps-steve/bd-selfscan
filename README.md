@@ -1,6 +1,8 @@
 # Black Duck SCA SelfScan for Kubernetes
 
-A solution for integrating Black Duck SCA's Detect into Kubernetes clusters to scan containerized applications using Black Duck Signature Scanner for Containers (BDSC).
+A solution for integrating Black Duck SCA's Detect into Kubernetes clusters to scan containerized applications using Black Duck Secure Container (BDSC).
+
+Note: requires licensed Registration ID, Black Duck Binary Analysis, Black Duck Secure Container (BDSC), and Match as a Service (MaaS). 
 
 ## 🚀 Project Overview
 
