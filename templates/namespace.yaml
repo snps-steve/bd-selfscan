@@ -6,7 +6,10 @@ metadata:
     {{- include "bd-selfscan.labels" . | nindent 4 }}
     name: {{ .Values.global.namespace }}
     app.kubernetes.io/component: system
+    app.kubernetes.io/managed-by: Helm
   annotations:
     description: "Black Duck SelfScan system namespace for multi-application container scanning"
     bd-selfscan/managed-by: "helm"
     bd-selfscan/purpose: "container-scanning"
+    meta.helm.sh/release-name: {{ .Release.Name }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace }}
