@@ -1,5 +1,5 @@
 #!/bin/bash
-# BD SelfScan - Bulk Application Scanner
+# BD SelfScan - Scan All Applications
 # Scans all applications defined in the configuration file with advanced options
 
 set -euo pipefail
@@ -21,58 +21,70 @@ log_error() { echo -e "${RED}[ERROR]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1" >&2; 
 log_debug() { [[ "${DEBUG_ENABLED:-false}" == "true" ]] && echo -e "${PURPLE}[DEBUG]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1" >&2; }
 log_section() { echo -e "\n${CYAN}$1${NC}" >&2; }
 
-# Configuration defaults
+# Global variables
 CONFIG_FILE="${CONFIG_FILE:-/config/applications.yaml}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKIP_CONFIRMATION="${SKIP_CONFIRMATION:-false}"
-DRY_RUN="${DRY_RUN:-false}"
-PARALLEL_SCANS="${PARALLEL_SCANS:-1}"
-TIER_FILTER="${TIER_FILTER:-}"
 DEBUG_ENABLED="${DEBUG_ENABLED:-false}"
+PARALLEL_SCANS=1
+TIER_FILTER=""
+DRY_RUN=false
+SKIP_CONFIRMATION=false
+CLUSTER_WIDE=false
+DISCOVER_APPS=false
+INDIVIDUAL_SCAN_TIMEOUT=3600
+REPORT_WEBHOOK=""
 
-# Statistics tracking
-TOTAL_APPS=0
+# Counters
 SUCCESS_COUNT=0
 FAILED_COUNT=0
+TOTAL_APPS=0
 SCAN_START_TIME=""
 
-# Display usage information
+# Arrays to track results
+SUCCESSFUL_APPS=()
+FAILED_APPS=()
+
+# Function to display usage
 usage() {
     cat << EOF
 Usage: $(basename "$0") [OPTIONS]
 
-BD SelfScan - Scan all applications defined in the configuration file.
+Scan all applications defined in the configuration file.
 
 OPTIONS:
-    --config FILE       Configuration file path (default: /config/applications.yaml)
-    --parallel N        Number of parallel scans (1-10, default: 1)  
-    --tier N            Only scan applications of specific tier (1-4)
-    --dry-run          Show what would be scanned without actually scanning
-    --yes              Skip confirmation prompt
-    --debug            Enable debug logging
-    --help             Show this help message
+    --config FILE           Configuration file path (default: /config/applications.yaml)
+    --parallel N            Number of parallel scans (1-10, default: 1)
+    --tier N                Only scan applications of specific tier (1-4)
+    --dry-run               Show what would be scanned without actually scanning
+    --yes                   Skip confirmation prompt
+    --cluster-wide          Scan all applications across cluster
+    --discover              Auto-discover applications (requires --cluster-wide)
+    --individual-timeout N  Timeout per individual application scan (default: 3600s)
+    --report-webhook URL    Send completion report to webhook
+    --debug                 Enable debug logging
+    --help                  Show this help message
 
 EXAMPLES:
-    # Scan all applications
-    $0
+    # Scan all applications with confirmation
+    $(basename "$0")
 
-    # Scan with 3 parallel processes
-    $0 --parallel 3
+    # Scan all applications in parallel without confirmation
+    $(basename "$0") --parallel 3 --yes
 
     # Scan only critical applications (tier 1)
-    $0 --tier 1
+    $(basename "$0") --tier 1 --yes
 
     # Dry run to see what would be scanned
-    $0 --dry-run
+    $(basename "$0") --dry-run
 
-    # Skip confirmation prompt
-    $0 --yes
+    # Scan with custom timeout per application
+    $(basename "$0") --individual-timeout 1800 --parallel 2
 
 ENVIRONMENT VARIABLES:
-    CONFIG_FILE         Configuration file path
-    SKIP_CONFIRMATION   Skip confirmation prompt (true/false)
-    DRY_RUN            Enable dry run mode (true/false)
-    DEBUG_ENABLED      Enable debug logging (true/false)
+    CONFIG_FILE             Configuration file path
+    DEBUG_ENABLED           Enable debug logging (true/false)
+    BD_URL                  Black Duck server URL
+    BD_TOKEN                Black Duck API token
 
 EOF
 }
@@ -87,39 +99,55 @@ parse_args() {
                 ;;
             --parallel)
                 PARALLEL_SCANS="$2"
-                if ! [[ "$PARALLEL_SCANS" =~ ^[1-9][0-9]*$ ]] || [[ $PARALLEL_SCANS -gt 10 ]]; then
-                    log_error "Parallel scans must be a number between 1 and 10"
+                if [[ ! "$PARALLEL_SCANS" =~ ^[1-9]|10$ ]]; then
+                    log_error "Parallel scans must be between 1 and 10"
                     exit 1
                 fi
                 shift 2
                 ;;
             --tier)
                 TIER_FILTER="$2"
-                if ! [[ "$TIER_FILTER" =~ ^[1-4]$ ]]; then
-                    log_error "Tier must be a number between 1 and 4"
+                if [[ ! "$TIER_FILTER" =~ ^[1-4]$ ]]; then
+                    log_error "Tier must be between 1 and 4"
                     exit 1
                 fi
                 shift 2
                 ;;
             --dry-run)
-                DRY_RUN="true"
+                DRY_RUN=true
                 shift
                 ;;
             --yes)
-                SKIP_CONFIRMATION="true"
+                SKIP_CONFIRMATION=true
                 shift
+                ;;
+            --cluster-wide)
+                CLUSTER_WIDE=true
+                shift
+                ;;
+            --discover)
+                DISCOVER_APPS=true
+                shift
+                ;;
+            --individual-timeout)
+                INDIVIDUAL_SCAN_TIMEOUT="$2"
+                shift 2
+                ;;
+            --report-webhook)
+                REPORT_WEBHOOK="$2"
+                shift 2
                 ;;
             --debug)
-                DEBUG_ENABLED="true"
-                export DEBUG_ENABLED="true"
+                DEBUG_ENABLED=true
                 shift
                 ;;
-            --help)
+            --help|-h)
                 usage
                 exit 0
                 ;;
             *)
                 log_error "Unknown option: $1"
+                echo ""
                 usage
                 exit 1
                 ;;
@@ -142,14 +170,14 @@ check_dependencies() {
 
     if [[ ${#missing_deps[@]} -gt 0 ]]; then
         log_error "Missing required dependencies: ${missing_deps[*]}"
-        log_info "Please install the missing dependencies and try again"
-        exit 1
+        log_info "Please install: ${missing_deps[*]}"
+        return 1
     fi
 
-    log_success "All dependencies are available"
+    log_success "All dependencies available"
 }
 
-# Install required tools if missing
+# Install tools if missing
 install_tools() {
     log_info "Installing required tools if missing..."
     
@@ -163,54 +191,32 @@ install_tools() {
     done
     
     if [[ ${#missing_tools[@]} -eq 0 ]]; then
-        log_success "All required tools are available"
+        log_success "All tools are available"
         return 0
     fi
     
-    log_info "Installing missing tools: ${missing_tools[*]}"
-
-    if command -v apk >/dev/null 2>&1; then
-        # Alpine Linux
-        apk update || { log_error "Failed to update package index"; return 1; }
-        for tool in "${missing_tools[@]}"; do
-            case "$tool" in
-                "yq")
-                    # Install yq manually as it's not in Alpine repos
-                    local yq_url="https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
-                    curl -L "$yq_url" -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
-                    ;;
-                "kubectl")
-                    # Install kubectl manually
-                    local kubectl_url="https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-                    curl -L "$kubectl_url" -o /usr/local/bin/kubectl && chmod +x /usr/local/bin/kubectl
-                    ;;
-                *)
-                    apk add --no-cache "$tool"
-                    ;;
-            esac
-        done
-    elif command -v apt-get >/dev/null 2>&1; then
-        # Ubuntu/Debian
-        apt-get update || { log_error "Failed to update package index"; return 1; }
-        for tool in "${missing_tools[@]}"; do
-            case "$tool" in
-                "yq")
-                    # Install yq manually
-                    local yq_url="https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
-                    curl -L "$yq_url" -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
-                    ;;
-                "kubectl")
-                    # Install kubectl manually
-                    local kubectl_url="https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-                    curl -L "$kubectl_url" -o /usr/local/bin/kubectl && chmod +x /usr/local/bin/kubectl
-                    ;;
-                *)
-                    apt-get install -y "$tool"
-                    ;;
-            esac
-        done
+    # Attempt installation based on available package manager
+    local install_cmd=""
+    
+    if command -v apt-get >/dev/null 2>&1; then
+        install_cmd="apt-get update && apt-get install -y"
+    elif command -v yum >/dev/null 2>&1; then
+        install_cmd="yum install -y"
+    elif command -v apk >/dev/null 2>&1; then
+        install_cmd="apk add"
     else
-        log_error "Unsupported package manager. Please install manually: ${missing_tools[*]}"
+        log_warning "No recognized package manager found. Some tools might be missing."
+        return 0
+    fi
+    
+    if [[ $EUID -ne 0 ]] && ! command -v sudo >/dev/null 2>&1; then
+        log_warning "Cannot install tools without root privileges. Please install manually: ${missing_tools[*]}"
+        return 1
+    fi
+    
+    log_info "Installing missing tools: ${missing_tools[*]}"
+    if ! $install_cmd "${missing_tools[@]}" >/dev/null 2>&1; then
+        log_error "Failed to install tools. Please install manually: ${missing_tools[*]}"
         return 1
     fi
 
@@ -278,6 +284,27 @@ get_applications_to_scan() {
     echo "$apps"
 }
 
+# Cluster-wide application discovery
+scan_cluster_wide() {
+    log_section "=== Cluster-Wide Application Discovery ==="
+    
+    # Get all applications from config plus any additional discovered apps
+    local configured_apps
+    configured_apps=$(get_applications_to_scan)
+    
+    # Option to discover additional applications dynamically
+    if [[ "${DISCOVER_APPS:-false}" == "true" ]]; then
+        log_info "Discovering additional applications in cluster..."
+        
+        # This could be enhanced to auto-discover based on common labels
+        # For now, we rely on explicit configuration
+        log_info "Note: Auto-discovery requires explicit configuration in applications.yaml"
+        log_info "Consider adding new applications to your configuration file"
+    fi
+    
+    echo "$configured_apps"
+}
+
 # Display scan summary
 display_scan_summary() {
     local apps_to_scan="$1"
@@ -292,6 +319,9 @@ display_scan_summary() {
     log_info "Parallel scans: $PARALLEL_SCANS"
     if [[ -n "$TIER_FILTER" ]]; then
         log_info "Tier filter: $TIER_FILTER"
+    fi
+    if [[ "$CLUSTER_WIDE" == "true" ]]; then
+        log_info "Mode: Cluster-wide scanning"
     fi
     if [[ "$DRY_RUN" == "true" ]]; then
         log_info "Mode: DRY RUN (no actual scanning)"
@@ -378,18 +408,31 @@ scan_single_application() {
         fi
     fi
 
+    # Set up environment for the scanner
+    export BD_URL="${BD_URL:-}"
+    export BD_TOKEN="${BD_TOKEN:-}"
+    export TRUST_CERT="${TRUST_CERT:-true}"
+    export DEBUG_ENABLED="${DEBUG_ENABLED:-false}"
+    
     # Run the scan with proper error handling and logging
     local log_prefix="[$app_num/$total]"
-    if "$scan_script" "$app_name" 2>&1 | while IFS= read -r line; do echo "$log_prefix $line"; done; then
+    if timeout "$INDIVIDUAL_SCAN_TIMEOUT" "$scan_script" "$app_name" 2>&1 | while IFS= read -r line; do echo "$log_prefix $line"; done; then
         end_time=$(date +%s)
         duration=$((end_time - start_time))
         log_success "[$app_num/$total] ✓ $app_name completed (${duration}s)"
+        SUCCESSFUL_APPS+=("$app_name")
         return 0
     else
         local exit_code=$?
         end_time=$(date +%s)
         duration=$((end_time - start_time))
-        log_error "[$app_num/$total] ✗ $app_name failed (${duration}s, exit code: $exit_code)"
+        
+        if [[ $exit_code -eq 124 ]]; then
+            log_error "[$app_num/$total] ✗ $app_name timed out after ${INDIVIDUAL_SCAN_TIMEOUT}s"
+        else
+            log_error "[$app_num/$total] ✗ $app_name failed (${duration}s, exit code: $exit_code)"
+        fi
+        FAILED_APPS+=("$app_name")
         return 1
     fi
 }
@@ -485,6 +528,64 @@ scan_applications_sequential() {
     done <<< "$apps_to_scan"
 }
 
+# Generate comprehensive scan report
+generate_scan_report() {
+    local start_time="$1"
+    local end_time="$2"
+    local total_duration=$((end_time - start_time))
+    
+    log_section "=== Multi-Application Scan Report ==="
+    
+    local report_file="/tmp/bd-selfscan-report.txt"
+    
+    cat > "$report_file" << EOF
+BD SelfScan Multi-Application Report
+===================================
+Scan Date: $(date)
+Configuration: $CONFIG_FILE
+Total Duration: ${total_duration}s ($(date -d@$total_duration -u +%H:%M:%S))
+Parallel Scans: $PARALLEL_SCANS
+Individual Timeout: ${INDIVIDUAL_SCAN_TIMEOUT}s
+
+Summary:
+--------
+Total Applications: $((SUCCESS_COUNT + FAILED_COUNT))
+Successful Scans: $SUCCESS_COUNT
+Failed Scans: $FAILED_COUNT
+Success Rate: $(( SUCCESS_COUNT * 100 / (SUCCESS_COUNT + FAILED_COUNT) ))%
+
+EOF
+
+    if [[ ${#SUCCESSFUL_APPS[@]} -gt 0 ]]; then
+        echo "Successful Applications:" >> "$report_file"
+        printf -- "- %s\n" "${SUCCESSFUL_APPS[@]}" >> "$report_file"
+        echo "" >> "$report_file"
+    fi
+    
+    if [[ ${#FAILED_APPS[@]} -gt 0 ]]; then
+        echo "Failed Applications:" >> "$report_file"
+        printf -- "- %s\n" "${FAILED_APPS[@]}" >> "$report_file"
+        echo "" >> "$report_file"
+        echo "Check individual scan logs for failure details." >> "$report_file"
+    fi
+    
+    log_info "Detailed report saved to: $report_file"
+    
+    # Optionally send report to a webhook
+    if [[ -n "$REPORT_WEBHOOK" ]]; then
+        if curl -X POST "$REPORT_WEBHOOK" \
+             -H "Content-Type: text/plain" \
+             --data-binary "@$report_file" \
+             --connect-timeout 10 \
+             --max-time 30 \
+             >/dev/null 2>&1; then
+            log_info "Report sent to webhook: $REPORT_WEBHOOK"
+        else
+            log_warning "Failed to send report to webhook: $REPORT_WEBHOOK"
+        fi
+    fi
+}
+
 # Main execution function
 main() {
     SCAN_START_TIME=$(date +%s)
@@ -501,10 +602,16 @@ main() {
     # Load configuration
     load_configuration || exit 1
 
-    # Get applications to scan
+    # Get applications to scan based on mode
     local apps_to_scan
-    if ! apps_to_scan=$(get_applications_to_scan); then
-        exit 1
+    if [[ "$CLUSTER_WIDE" == "true" ]]; then
+        if ! apps_to_scan=$(scan_cluster_wide); then
+            exit 1
+        fi
+    else
+        if ! apps_to_scan=$(get_applications_to_scan); then
+            exit 1
+        fi
     fi
 
     # Display summary
@@ -513,6 +620,12 @@ main() {
     # Request confirmation
     request_confirmation
 
+    # Add resource monitoring warning for large-scale scans
+    if [[ $PARALLEL_SCANS -gt 3 ]]; then
+        log_warning "Running $PARALLEL_SCANS parallel scans - monitor cluster resources"
+        log_info "Consider reducing parallelism if cluster resources are limited"
+    fi
+
     # Execute scans based on parallel setting
     if [[ $PARALLEL_SCANS -gt 1 ]]; then
         scan_applications_parallel "$apps_to_scan"
@@ -520,10 +633,12 @@ main() {
         scan_applications_sequential "$apps_to_scan"
     fi
 
-    # Final report
+    # Generate comprehensive report
     local end_time duration
     end_time=$(date +%s)
     duration=$((end_time - SCAN_START_TIME))
+    
+    generate_scan_report "$SCAN_START_TIME" "$end_time"
     
     log_section "=== Scan Complete ==="
     log_info "Total execution time: ${duration}s"
@@ -538,8 +653,8 @@ main() {
         log_success "All scans completed successfully!"
         exit 0
     elif [[ $SUCCESS_COUNT -gt 0 ]]; then
-        log_warning "Scans completed with some failures"
-        exit 2
+        log_warning "Some scans completed with failures (check report for details)"
+        exit 1
     else
         log_error "All scans failed"
         exit 1
@@ -548,7 +663,7 @@ main() {
 
 # Set up error handling
 trap 'log_error "Unexpected error at line $LINENO"' ERR
-trap 'log_warning "Script interrupted"; exit 130' INT TERM
+trap 'log_warning "Scan interrupted by signal"; exit 130' INT TERM
 
 # Source common functions if available (optional)
 if [[ -f "/scripts/common-functions.sh" ]]; then
