@@ -163,13 +163,13 @@ install_additional_tools() {
 
 # Setup Synopsys Detect
 setup_detect() {
-    log_info "Setting up Synopsys Detect..."
+    log_info "Setting up Detect..."
     
     mkdir -p "$TEMP_DIR/detect"
     cd "$TEMP_DIR/detect"
     
     # Download Detect script with retries
-    local detect_url="https://detect.synopsys.com/detect7.sh"
+    local detect_url="https://detect.blackduck.com/detect10.sh"
     local retries=3
     local attempt=1
     
