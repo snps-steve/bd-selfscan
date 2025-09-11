@@ -1,15 +1,26 @@
+# Fixed namespace template with proper validation
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: {{ .Values.global.namespace }}
+  name: {{ .Values.global.namespace | quote }}
   labels:
     {{- include "bd-selfscan.labels" . | nindent 4 }}
-    name: {{ .Values.global.namespace }}
+    name: {{ .Values.global.namespace | quote }}
     app.kubernetes.io/component: system
     app.kubernetes.io/managed-by: Helm
+    # Add security and compliance labels
+    security.policy.type: "scanning"
+    compliance.framework: "vulnerability-management"
   annotations:
     description: "Black Duck SelfScan system namespace for multi-application container scanning"
     bd-selfscan/managed-by: "helm"
     bd-selfscan/purpose: "container-scanning"
-    meta.helm.sh/release-name: {{ .Release.Name }}
-    meta.helm.sh/release-namespace: {{ .Release.Namespace }}
+    bd-selfscan/version: {{ .Chart.AppVersion | quote }}
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+    # Add resource quotas annotation for better resource management
+    kubectl.kubernetes.io/default-container: "scanner"
+    # Security annotations
+    pod-security.kubernetes.io/enforce: "restricted"
+    pod-security.kubernetes.io/audit: "restricted"
+    pod-security.kubernetes.io/warn: "restricted"
