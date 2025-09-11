@@ -677,7 +677,7 @@ scan_container_image() {
     # Prepare Detect arguments with proper escaping
     local detect_args=(
         --blackduck.url="$BD_URL"
-        --blackduck.api.token="$BD_BEARER_TOKEN"
+        --blackduck.api.token="$BD_TOKEN"
         --blackduck.trust.cert="$TRUST_CERT"
         --detect.project.name="$project_name"
         --detect.project.version.name="$project_version"
