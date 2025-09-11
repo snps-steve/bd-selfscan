@@ -1,508 +1,421 @@
-# Black Duck SelfScan for Kubernetes
+# Scripts Documentation - BD SelfScan
 
-A solution for integrating Black Duck SCA's Detect into Kubernetes clusters to scan containerized applications using Black Duck Signature Scanner for Containers (BDSC).
+This directory contains the core scanning scripts and controller for BD SelfScan container vulnerability scanning.
 
-## 🚀 Project Overview
+## 📁 Script Overview
 
-BD SelfScan enables organizations to secure their container deployments by:
-- **Discovering container images** from running pods across all namespaces
-- **Performing BDSC-based vulnerability scanning** with layer-by-layer analysis
-- **Organizing results** in Black Duck using a microservices-friendly project structure
-- **Automating scans** through Kubernetes Jobs and event-driven triggers
+| Script | Purpose | Phase | Language | Usage |
+|--------|---------|-------|----------|-------|
+| `scan-application.sh` | Single application scanner wrapper | 1 | Bash | Called by Helm jobs |
+| `scan-all-applications.sh` | Bulk application scanner | 1 | Bash | On-demand bulk scanning |
+| `bdsc-container-scan.sh` | Core BDSC scanning engine | 1 | Bash | Container image analysis |
+| `controller.py` | Kubernetes deployment watcher | 2 | Python | Automated scan triggering |
 
-## 🏗️ Architecture & Design
+## 🔧 Core Scripts
 
-### Project Organization in Black Duck
+### scan-application.sh
 
-BD SelfScan follows a microservices-friendly approach to organizing scan results:
+**Purpose**: Wrapper script that scans a single application by name from the configuration.
 
-- **One Project per microservice** - Clear ownership and vulnerability history
-- **Versions = release tags** (e.g., 1.12.0, 2025.08.1) or build numbers  
-- **Project Groups for applications** - Roll up policies, reporting, and permissions
-- **Deterministic naming** - Consistent across CI/CD pipelines
+**Usage**:
+```bash
+# Scan by application name
+./scan-application.sh "Black Duck SCA"
 
-Example structure:
+# Scan with explicit parameters  
+./scan-application.sh "App Name" "namespace" "labelSelector" "projectGroup"
 ```
-Project Group: Acme Checkout
-├── Project: cart-service → Versions: 2025.08.1, 2025.08.2
-├── Project: pricing-service → Versions: 1.19.0, 1.19.1  
-└── Project: gateway-service → Versions: v87, v88
-```
-
-### Configuration-Driven Application Mapping
-
-Applications are mapped via configuration file from `namespace + labelSelector` to Black Duck Project Groups:
-
-```yaml
-applications:
-  - name: "Black Duck SCA"
-    namespace: "bd"
-    labelSelector: "app=blackduck"  
-    projectGroup: "Black Duck SCA"
-    projectTier: 2
-    scanOnDeploy: true    # For Phase 2 automation
-```
-
-### How BD SelfScan Works
-
-1. **Discovery**: Uses Kubernetes label selectors to find pods in target namespaces
-2. **Image Extraction**: Extracts container image references from pod specifications
-3. **Image Download**: Downloads container images using Skopeo for offline scanning
-4. **BDSC Scanning**: Performs layer-by-layer vulnerability analysis using Black Duck Signature Scanner
-5. **Project Creation**: Automatically creates/updates Black Duck projects and project groups
-6. **Result Organization**: Organizes scan results by microservice with proper versioning
-
-## 📋 Implementation Status
-
-### Phase 1: On-Demand Scanning ✅ **COMPLETE**
-
-**Current Status**: Fully implemented and tested
-
-**Components**:
-- Custom Docker image with pre-installed tools (Java, kubectl, yq, jq, skopeo)
-- Kubernetes Job template for on-demand execution
-- Configuration-driven application mapping
-- BDSC-based container scanning
-- GitHub Container Registry integration
 
 **Key Features**:
-- Scan single applications or all configured applications
-- Automatic Black Duck Project Group creation
-- Configurable resource limits and timeouts
-- Debug mode for troubleshooting
-- Comprehensive error handling and logging
+- Reads application configuration from `/config/applications.yaml`
+- Validates application exists in configuration
+- Sets environment variables for the main scanning engine
+- Provides structured logging and error handling
 
-### Phase 2: Automated Scanning 🚧 **PLANNED**
+**Environment Variables**:
+- `APP_NAME` - Application name to scan (alternative to CLI argument)
+- `TARGET_NS` - Override namespace (optional)
+- `LABEL_SELECTOR` - Override label selector (optional) 
+- `DESIRED_PROJECT_GROUP` - Override project group (optional)
 
-**Planned Features**:
-- Kubernetes operator to watch for deployment events
-- Automatic scanning when pods are created/updated
-- Scheduled scanning based on cron expressions
-- Integration with GitOps workflows
+### scan-all-applications.sh
 
-## ⚡ Quick Start - New Deployment/Installation
+**Purpose**: Scans all applications defined in the configuration file with advanced options.
 
-### Prerequisites
-- Kubernetes cluster (tested with MicroK8s)
-- Helm 3
-- Access to Black Duck SCA instance
-- GitHub Container Registry access (for image pulls)
-
-### Step 1: Prepare Environment
+**Usage**:
 ```bash
-# Clone repository
-git clone https://github.com/snps-steve/bd-selfscan.git
-cd bd-selfscan
+# Scan all applications
+./scan-all-applications.sh
 
-# Create namespace and secrets
-kubectl create namespace bd-selfscan-system
-kubectl create secret generic blackduck-creds \
-  --from-literal=url="https://your-blackduck-server" \
-  --from-literal=token="your-api-token" \
-  -n bd-selfscan-system
+# Parallel scanning
+./scan-all-applications.sh --parallel 3
+
+# Filter by tier
+./scan-all-applications.sh --tier 1
+
+# Dry run mode
+./scan-all-applications.sh --dry-run
+
+# Skip confirmation
+./scan-all-applications.sh --yes
 ```
 
-### Step 2: Configure Applications
-Edit `configs/applications.yaml` to define your target applications:
+**Command Line Options**:
+- `--config FILE` - Configuration file path (default: `/config/applications.yaml`)
+- `--parallel N` - Number of parallel scans (1-10, default: 1)
+- `--tier N` - Only scan applications of specific tier (1-4)
+- `--dry-run` - Show what would be scanned without actually scanning
+- `--yes` - Skip confirmation prompt
+- `--help` - Show help message
 
-```yaml
-applications:
-  - name: "Black Duck SCA"
-    namespace: "bd"
-    labelSelector: "app=blackduck"
-    projectGroup: "Black Duck SCA"
-    projectTier: 2
-    description: "Black Duck SCA test deployment"
-    
-  - name: "Your Application"
-    namespace: "your-namespace"
-    labelSelector: "app=your-app"
-    projectGroup: "Your Project Group"
-    projectTier: 3
-    description: "Your application description"
+**Features**:
+- Comprehensive progress reporting
+- Success/failure tracking with detailed summary
+- Parallel execution support
+- Tier-based filtering
+- Interactive confirmation with override
+- Color-coded output for better readability
+
+### bdsc-container-scan.sh
+
+**Purpose**: Core Black Duck Container Scanner engine that performs the actual vulnerability scanning.
+
+**Environment Variables** (Required):
+- `BD_URL` - Black Duck server URL
+- `BD_TOKEN` - Black Duck API token
+- `TARGET_NS` - Kubernetes namespace to scan
+- `LABEL_SELECTOR` - Pod label selector
+- `DESIRED_PROJECT_GROUP` - Black Duck Project Group name
+
+**Environment Variables** (Optional):
+- `PROJECT_TIER` - Project tier (1-4, default: 3)
+- `POLICY_FAIL_SEVERITIES` - Policy failure severities (default: "CRITICAL,BLOCKER")
+- `TRUST_CERT` - Trust SSL certificates (default: "true")
+- `DEBUG_ENABLED` - Enable debug logging (default: "false")
+- `KEEP_TEMP_FILES` - Keep temporary files for debugging (default: "false")
+- `IMAGE_DOWNLOAD_TIMEOUT` - Timeout for image downloads (default: "600")
+- `IMAGE_DOWNLOAD_RETRIES` - Retry count for failed downloads (default: "3")
+- `SCAN_TIMEOUT` - Timeout for individual scans (default: "1800")
+
+**Key Features**:
+- **BDSC Integration**: Uses Black Duck Signature Scanner for Containers (not Docker Inspector)
+- **Layer-by-Layer Analysis**: Separates components by container image layers
+- **Project Group Management**: Automatically creates Project Groups if they don't exist
+- **Container Discovery**: Finds container images from Kubernetes pods using label selectors
+- **Image Download**: Downloads container images for offline scanning using Skopeo
+- **Robust Error Handling**: Retry logic, timeout handling, and comprehensive logging
+- **Resource Management**: Cleanup of temporary files and efficient resource usage
+
+**Scanning Process**:
+1. Install required tools (kubectl, skopeo, yq, Java, etc.)
+2. Setup Synopsys Detect scanner
+3. Verify/create Black Duck Project Group
+4. Discover container images from Kubernetes pods
+5. Download each container image for scanning
+6. Extract project/version information from image tags
+7. Execute BDSC scan with proper Black Duck project organization
+8. Report results and cleanup temporary files
+
+### controller.py
+
+**Purpose**: Kubernetes controller for Phase 2 automated scanning that watches deployment events and triggers scans.
+
+**Dependencies**:
+```python
+kubernetes==28.1.0
+PyYAML==6.0.1  
+prometheus-client==0.19.0
+asyncio-throttle==1.0.2
 ```
 
-### Step 3: Install BD SelfScan
+**Environment Variables**:
+- `NAMESPACE` - Controller namespace (default: "bd-selfscan-system")
+- `DEBUG` - Enable debug logging (default: "false")
+- `LOG_LEVEL` - Logging level (default: "INFO")
+- `SCAN_JOB_TIMEOUT` - Scan job timeout in seconds (default: "3600")
+- `MAX_CONCURRENT_SCANS` - Maximum concurrent scans (default: "5")
+- `CLEANUP_INTERVAL` - Job cleanup interval in seconds (default: "3600")
+- `CONFIG_RELOAD_INTERVAL` - Configuration reload interval (default: "600")
+
+**Key Features**:
+- **Event-Driven Scanning**: Watches Kubernetes deployment events across all namespaces
+- **Application Matching**: Maps deployments to application configurations using label selectors
+- **Automatic Job Creation**: Creates scan jobs for matching applications with `scanOnDeploy: true`
+- **Metrics Collection**: Comprehensive Prometheus metrics for monitoring and alerting
+- **Health Monitoring**: Health and readiness endpoints for Kubernetes probes
+- **Resource Management**: Automatic cleanup of old scan jobs
+- **Configuration Reloading**: Live reload of application configuration without restarts
+- **Async Architecture**: High-performance async processing with proper error handling
+
+**Metrics Exposed**:
+- `bd_selfscan_deployment_events_total` - Deployment events processed
+- `bd_selfscan_jobs_created_total` - Scan jobs created
+- `bd_selfscan_jobs_failed_total` - Failed scan job creations
+- `bd_selfscan_job_duration_seconds` - Scan job duration histogram
+- `bd_selfscan_policy_violations_total` - Policy violations found
+- `bd_selfscan_controller_healthy` - Controller health status
+- `bd_selfscan_active_jobs` - Currently active scan jobs
+
+**HTTP Endpoints**:
+- `:8080/metrics` - Prometheus metrics endpoint
+- `:8081/health` - Health check endpoint
+- `:8081/ready` - Readiness check endpoint
+
+## 🚀 Usage Examples
+
+### Phase 1: On-Demand Scanning
+
+#### Scan Single Application
 ```bash
-# Install BD SelfScan
-helm install bd-selfscan ./bd-selfscan \
-  --namespace bd-selfscan-system \
-  --create-namespace
+# Using Helm (recommended)
+helm install bd-scan ./bd-selfscan --set scanTarget="Black Duck SCA"
 
-# Verify installation
-kubectl get all -n bd-selfscan-system
-kubectl get clusterrole bd-selfscan
-kubectl get clusterrolebinding bd-selfscan
+# Direct script execution (for testing)
+./scripts/scan-application.sh "Black Duck SCA"
 ```
 
-### Step 4: Test Installation
+#### Scan All Applications  
 ```bash
-# Test scan of configured application
-helm install bd-scan-test ./bd-selfscan \
-  --set scanTarget="Black Duck SCA"
+# Sequential scanning
+helm install bd-scan-all ./bd-selfscan
 
-# Monitor progress
-kubectl get jobs -n bd-selfscan-system -w
-kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner -f
-```
-
-## 🔄 Quick Start - Existing Deployment of BD SelfScan
-
-If you already have BD SelfScan installed and want to trigger scans or make updates:
-
-### Trigger On-Demand Scans
-```bash
-# Scan specific application (for existing BD SelfScan deployment)
-helm upgrade bd-selfscan ./bd-selfscan \
-  --set scanTarget="Black Duck SCA"
-
-# Scan all configured applications
-helm upgrade bd-selfscan ./bd-selfscan
-
-# Enable debug mode for troubleshooting
-helm upgrade bd-selfscan ./bd-selfscan \
-  --set scanTarget="Black Duck SCA" \
-  --set debug.enabled=true \
-  --set debug.logLevel=DEBUG
-```
-
-### Update Configuration
-```bash
-# Backup current configuration
-kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml > backup-config.yaml
-
-# Update application configuration
-kubectl apply -f configs/applications.yaml
-
-# Upgrade BD SelfScan with new settings
-helm upgrade bd-selfscan ./bd-selfscan
-```
-
-## 📊 Quick Start - Monitoring
-
-### View Scan Progress
-```bash
-# Watch active scan jobs
-kubectl get jobs -n bd-selfscan-system -w
-
-# View real-time scan logs
-kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner -f
-
-# Check scan job completion status
-kubectl get jobs -n bd-selfscan-system --sort-by=.metadata.creationTimestamp
-
-# Get detailed job information
-kubectl describe job <job-name> -n bd-selfscan-system
-```
-
-### Check System Health
-```bash
-# View all BD SelfScan resources
-kubectl get all -n bd-selfscan-system
-
-# Check RBAC permissions
-kubectl get clusterrole bd-selfscan
-kubectl get clusterrolebinding bd-selfscan
-
-# Verify configuration
-kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml
-
-# Check recent events
-kubectl get events -n bd-selfscan-system --sort-by='.lastTimestamp'
-```
-
-### Monitor Resource Usage
-```bash
-# Check pod resource usage
-kubectl top pods -n bd-selfscan-system
-
-# Check node resources
-kubectl top nodes
-
-# View pod details and resource limits
-kubectl describe pods -n bd-selfscan-system
-```
-
-### Check Black Duck Results
-```bash
-# After successful scans, verify in Black Duck UI:
-echo "Navigate to your Black Duck server and check:"
-echo "1. Project Groups are created"
-echo "2. Container projects show proper versions"  
-echo "3. Vulnerability data is populated"
-echo "4. Policy violations are reported (if configured)"
-```
-
-## 🔧 Technical Implementation
-
-### Container Image
-- **Registry**: `ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest`
-- **Build**: Automated via GitHub Actions
-- **Base**: Ubuntu 22.04 with Black Duck scanning tools
-- **Tools**: Java 17, kubectl, yq, jq, skopeo, Synopsys Detect
-
-### Security Configuration
-- **Enhanced RBAC**: Cluster-wide permissions with service account
-- **Pod Security**: Runs with elevated privileges for container operations
-- **Secret Management**: Black Duck credentials stored in Kubernetes secrets
-- **Resource Limits**: Configurable CPU/memory limits for scan jobs
-
-### Key Scanning Process
-
-1. **Tool Setup**: Install required dependencies (kubectl, skopeo, yq, Java)
-2. **Configuration Loading**: Read application configuration from ConfigMap
-3. **Project Group Management**: Verify/create Black Duck Project Group
-4. **Pod Discovery**: Find pods using namespace and label selectors
-5. **Image Discovery**: Extract container images from pod specifications
-6. **Image Download**: Download images using Skopeo for offline scanning
-7. **BDSC Scanning**: Execute Black Duck Signature Scanner for Containers
-8. **Result Organization**: Create/update Black Duck projects with proper versioning
-9. **Cleanup**: Remove temporary files and report results
-
-## 📁 Project Structure
-
-```
-bd-selfscan/
-├── Chart.yaml                           # Helm chart metadata
-├── values.yaml                          # Default configuration values
-├── README.md                           # This file
-├── configs/
-│   ├── applications.yaml              # Application configuration
-│   └── README.md                       # Configuration guide
-├── templates/
-│   ├── _helpers.tpl                    # Helm template helpers
-│   ├── namespace.yaml                  # System namespace
-│   ├── rbac.yaml                       # Cluster RBAC resources
-│   ├── configmap-apps.yaml            # Applications ConfigMap
-│   ├── configmap-scanner-script.yaml  # Scanner scripts
-│   ├── job-on-demand.yaml             # On-demand scan jobs
-│   └── deployment-controller.yaml     # Phase 2 controller (planned)
-├── scripts/
-│   ├── scan-application.sh            # Single application scanner
-│   ├── scan-all-applications.sh       # Bulk application scanner  
-│   ├── bdsc-container-scan.sh         # Core BDSC scanning logic
-│   ├── controller.py                  # Phase 2 controller (planned)
-│   └── README.md                       # Scripts documentation
-└── docs/
-    ├── INSTALL.md                      # Detailed installation guide
-    ├── CONFIGURATION.md               # Configuration reference
-    └── TROUBLESHOOTING.md             # Common issues and solutions
-```
-
-## ⚙️ Configuration
-
-### Required Secrets
-```bash
-# Black Duck credentials
-kubectl create secret generic blackduck-creds \
-  --from-literal=url="https://your-blackduck-server" \
-  --from-literal=token="your-api-token" \
-  -n bd-selfscan-system
-```
-
-### Key Configuration Options
-
-```yaml
-# values.yaml highlights
-scanner:
-  image: "ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest"
-  resources:
-    requests:
-      memory: "2Gi"
-      cpu: "500m"
-      ephemeral-storage: "10Gi"
-    limits:
-      memory: "8Gi"
-      cpu: "4"
-      ephemeral-storage: "50Gi"
-
-# Black Duck settings
-blackduck:
-  tokenSecretName: "blackduck-creds"
-  trustCert: true
-  connectionTimeout: 120
-  readTimeout: 300
-
-# Debug settings
-debug:
-  enabled: false
-  logLevel: "INFO"
-  keepTempFiles: false
-
-# Scanning configuration
-scanning:
-  projectTier: 3
-  policyFailSeverities: "CRITICAL,BLOCKER"
-  scanTimeout: 1800
-```
-
-## 🔍 Troubleshooting
-
-### Common Issues
-
-#### Image Pull Errors
-```bash
-# Verify image accessibility
-kubectl run test-image --image=ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest --rm -it --restart=Never -- /bin/bash
-```
-
-#### RBAC Permission Issues
-```bash
-# Test service account permissions
-kubectl auth can-i get pods --all-namespaces --as=system:serviceaccount:bd-selfscan-system:bd-selfscan
-kubectl auth can-i create jobs -n bd-selfscan-system --as=system:serviceaccount:bd-selfscan-system:bd-selfscan
-```
-
-#### Black Duck Connectivity
-```bash
-# Test from scan pod
-kubectl exec -it <scan-pod-name> -n bd-selfscan-system -- curl -k https://your-blackduck-server/api/projects
-```
-
-#### Configuration Issues
-```bash
-# Validate YAML syntax
-yq eval '.applications[].name' configs/applications.yaml
-
-# Test label selectors find pods
-kubectl get pods -n "target-namespace" -l "app=target-app"
-```
-
-### Debug Commands
-```bash
-# View all BD SelfScan resources
-kubectl get all -n bd-selfscan-system
-
-# Check failed jobs
-kubectl get jobs -n bd-selfscan-system --field-selector status.successful=0
-
-# View pod events
-kubectl get events -n bd-selfscan-system --field-selector involvedObject.kind=Pod
-
-# Check configuration
-kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml
-
-# View detailed logs from completed job
-kubectl logs -n bd-selfscan-system job/<job-name>
-```
-
-## 🚀 Advanced Usage
-
-### Production Deployment
-```bash
-# Production-ready deployment
-helm install bd-selfscan ./bd-selfscan \
-  --namespace bd-selfscan-system \
-  --create-namespace \
-  --set scanner.resources.limits.memory=16Gi \
-  --set scanner.resources.limits.cpu=8 \
-  --set scanning.scanTimeout=3600
-```
-
-### Custom Resource Limits
-```bash
-# For large containers or high-volume scanning
-helm upgrade bd-selfscan ./bd-selfscan \
-  --set scanner.resources.limits.memory=32Gi \
-  --set scanner.resources.limits.cpu=16 \
-  --set scanner.resources.limits.ephemeralStorage=200Gi
-```
-
-### Parallel Scanning
-```bash
-# Use scan-all-applications.sh for parallel execution
+# Parallel scanning (direct script)
 ./scripts/scan-all-applications.sh --parallel 3 --yes
 ```
 
-### Debug Mode
+#### Debug Single Application
 ```bash
-# Enable comprehensive debugging
-helm upgrade bd-selfscan ./bd-selfscan \
+# Enable debug mode
+helm install bd-scan-debug ./bd-selfscan \
   --set scanTarget="Black Duck SCA" \
   --set debug.enabled=true \
   --set debug.logLevel=DEBUG \
   --set debug.keepTempFiles=true
 ```
 
-## 🔒 Lessons Learned
+### Phase 2: Automated Scanning
 
-### Technical Challenges Resolved
-1. **Shell Compatibility**: Ubuntu containers default to dash, not bash - scripts must use `#!/bin/bash`
-2. **Container Permissions**: Black Duck scanning requires root privileges and specific Linux capabilities
-3. **Tool Installation**: Pre-build tools in container image rather than installing at runtime
-4. **Image Distribution**: Use GitHub Container Registry for automated builds and distribution
-
-### Kubernetes Patterns
-1. **ConfigMaps for Scripts**: Store scanning logic in ConfigMaps for easy updates without image rebuilds  
-2. **Security Contexts**: Properly configure both pod-level and container-level security contexts
-3. **Resource Management**: Set appropriate CPU/memory limits for scanning workloads
-4. **Job Management**: Use ttlSecondsAfterFinished for automatic cleanup
-
-### Black Duck Integration  
-1. **Project Group Management**: Automatically create project groups if they don't exist
-2. **Container Scanning**: Use BDSC (not Docker Inspector) for layer-by-layer analysis
-3. **Project Naming**: Follow consistent naming conventions for microservices architecture
-
-## 🛣️ Roadmap
-
-### Phase 1 ✅ (Complete)
-- [x] On-demand multi-application scanning
-- [x] Configuration-driven application mapping  
-- [x] BDSC Container scanning integration
-- [x] Automatic Project Group creation
-- [x] Cluster-wide RBAC and security
-
-### Phase 2 🚧 (Planned)
-- [ ] Kubernetes controller for deployment events
-- [ ] Automated scan triggering  
-- [ ] Scheduled scanning with cron
-- [ ] Health checks and self-healing
-
-### Future Enhancements
-- [ ] Policy customization per application
-- [ ] Slack/Teams notification integration
-- [ ] Multi-cluster federation support
-- [ ] GitOps integration (ArgoCD/Flux)
-
-## 🤝 Contributing
-
-### Development Setup
+#### Enable Automated Scanning
 ```bash
-# Clone and setup development environment
-git clone https://github.com/snps-steve/bd-selfscan.git
-cd bd-selfscan
-
-# Install development dependencies
-pip install -r scripts/requirements-dev.txt
-
-# Run tests
-./scripts/run-tests.sh
+# Deploy with automation enabled
+helm upgrade bd-selfscan ./bd-selfscan \
+  --set automated.enabled=true
 ```
 
-### Contribution Guidelines
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes with proper testing
-4. Commit with conventional commit messages
-5. Push and create a Pull Request
+#### Monitor Controller
+```bash
+# Check controller health
+kubectl get pods -n bd-selfscan-system -l app.kubernetes.io/component=controller
 
-## 📄 License
+# View controller logs
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller -f
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+# Check metrics
+kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8080:8080
+curl http://localhost:8080/metrics
+```
 
-## 🙋 Support
+## 📊 Monitoring and Debugging
 
-- **Issues**: [GitHub Issues](https://github.com/snps-steve/bd-selfscan/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/snps-steve/bd-selfscan/discussions)
-- **Documentation**: [Project Wiki](https://github.com/snps-steve/bd-selfscan/wiki)
-- **Security**: For security issues, email security@your-org.com
+### Log Analysis
 
-## 🏆 Acknowledgments
+#### Scan Job Logs
+```bash
+# View running scan logs
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner -f
 
-- **Synopsys Black Duck** - Container scanning technology
-- **Kubernetes Community** - Container orchestration platform  
-- **Helm Community** - Package management for Kubernetes
+# View completed scan logs
+kubectl logs -n bd-selfscan-system job/bd-selfscan-black-duck-sca-20240826-143022
+```
+
+#### Controller Logs
+```bash
+# Real-time controller logs
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller -f
+
+# Previous container logs (if restarted)
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller --previous
+```
+
+### Common Log Patterns
+
+#### Successful Scan
+```
+[INFO] Starting BD SelfScan Container Scanner
+[INFO] Target Namespace: bd
+[INFO] Label Selector: app=blackduck  
+[INFO] Project Group: Black Duck SCA
+[SUCCESS] Project Group 'Black Duck SCA' created successfully
+[INFO] Found 3 unique container images
+[SUCCESS] Downloaded: blackduck/webapp:2023.4.0
+[SUCCESS] Scan completed for blackduck/webapp:2023.4.0 (245s)
+[SUCCESS] All container scans completed successfully!
+```
+
+#### Configuration Error
+```
+[ERROR] Application 'Unknown App' not found in configuration
+[ERROR] Required environment variable BD_TOKEN is not set
+[WARNING] No container images found in namespace 'test' with labels 'app=nonexistent'
+```
+
+#### Network Error
+```
+[ERROR] Failed to download: registry.example.com/app:v1.0.0
+[ERROR] Failed to query Project Groups from Black Duck
+[WARNING] Retrying scan job creation (attempt 2/3)
+```
+
+### Performance Monitoring
+
+#### Scan Duration Analysis
+```bash
+# Get scan job durations
+kubectl get jobs -n bd-selfscan-system \
+  -o custom-columns="NAME:.metadata.name,DURATION:.status.completionTime"
+
+# Analyze metrics
+curl -s http://controller:8080/metrics | grep bd_selfscan_job_duration_seconds
+```
+
+#### Resource Usage
+```bash  
+# Check resource usage of scan jobs
+kubectl top pods -n bd-selfscan-system -l app.kubernetes.io/component=scanner
+
+# Check controller resource usage  
+kubectl top pods -n bd-selfscan-system -l app.kubernetes.io/component=controller
+```
+
+## 🔧 Configuration and Customization
+
+### Script Configuration
+
+#### Scanner Script Configuration
+Scripts read configuration from:
+- `/config/applications.yaml` - Application definitions
+- Environment variables - Runtime configuration
+- Command line arguments - Execution options
+
+#### Controller Configuration
+The controller loads configuration from:
+- ConfigMap `bd-selfscan-applications` - Application definitions  
+- Environment variables - Controller behavior
+- Kubernetes secrets - Black Duck credentials
+
+### Customizing Scan Behavior
+
+#### Custom Detect Arguments
+Modify `bdsc-container-scan.sh` to add custom Synopsys Detect arguments:
+
+```bash
+# Add custom detect args in the detect_args array
+detect_args+=(
+    --detect.blackduck.signature.scanner.snippet.matching=SNIPPET_MATCHING
+    --detect.blackduck.signature.scanner.upload.source.mode=true  
+)
+```
+
+#### Custom Image Processing
+Modify image discovery logic in `bdsc-container-scan.sh`:
+
+```bash
+# Custom image filtering
+images=$(echo "$pods_json" | jq -r '
+    [.items[]? | 
+     .spec.containers[]?, 
+     .spec.initContainers[]? | 
+     .image] | 
+    unique | 
+    map(select(. | test("^registry.company.com"))) |  # Only scan company images
+    .[]
+' 2>/dev/null | sort -u)
+```
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+#### Script Permissions
+```bash
+# Fix script permissions
+chmod +x scripts/*.sh
+```
+
+#### Missing Dependencies
+```bash
+# Install required tools in container
+apk add --no-cache curl jq bash coreutils openjdk17-jre skopeo yq
+```
+
+#### Black Duck Connectivity
+```bash
+# Test Black Duck API access
+curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/projects"
+```
+
+#### Kubernetes Permissions
+```bash
+# Test cluster access
+kubectl auth can-i get pods --all-namespaces
+kubectl auth can-i create jobs -n bd-selfscan-system
+```
+
+### Debug Mode
+
+Enable comprehensive debugging:
+
+```bash
+# Set debug environment variables
+export DEBUG_ENABLED=true
+export LOG_LEVEL=DEBUG  
+export KEEP_TEMP_FILES=true
+
+# Run with verbose output
+./scripts/scan-application.sh "Black Duck SCA" 2>&1 | tee debug.log
+```
+
+### Performance Tuning
+
+#### Optimize Resource Limits
+```yaml
+# In values.yaml
+scanner:
+  resources:
+    requests:
+      memory: "4Gi"      # Increase for large images
+      cpu: "1"           # Increase for faster scanning
+    limits:
+      memory: "16Gi"     # Increase for complex scans
+      cpu: "8"           # Max CPU for parallel processing
+      ephemeralStorage: "100Gi"  # Large image storage
+```
+
+#### Optimize Parallel Scanning
+```bash
+# Balance parallel scans with cluster resources
+./scripts/scan-all-applications.sh --parallel 5  # Adjust based on cluster capacity
+```
+
+## 🔒 Security Considerations
+
+### Script Security
+- Scripts run with minimal required permissions
+- Temporary files are cleaned up after execution
+- Secrets are passed via environment variables, not files
+- Container images are downloaded to ephemeral storage
+
+### Controller Security
+- Runs as non-root user (65534)
+- Read-only root filesystem
+- Drops all capabilities
+- Uses Kubernetes RBAC with minimal required permissions
+
+### Network Security
+- Optional NetworkPolicy for controller traffic isolation
+- HTTPS-only communication with Black Duck
+- No persistent network connections
 
 ---
 
-**🔒 Made with ❤️ for secure container deployments**
+For more information, see the main [README.md](../README.md) and [configuration documentation](../configs/README.md).
