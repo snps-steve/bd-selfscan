@@ -77,13 +77,31 @@ spec:
           image: {{ .Values.scanner.image }}
           imagePullPolicy: {{ .Values.scanner.imagePullPolicy }}
 
-          # Command execution
+          # UPDATED: Command execution with proper error handling and bash shell
           {{- if .Values.scanTarget }}
-          command: ["/scripts/scan-application.sh"]
-          args: [{{ .Values.scanTarget | quote }}]
+          # Single application scan
+          command: ["/bin/bash"]
+          args: 
+            - "-c"
+            - |
+              set -euo pipefail
+              echo "Starting single application scan for: {{ .Values.scanTarget }}"
+              /scripts/scan-application.sh {{ .Values.scanTarget | quote }}
+              exit_code=$?
+              echo "Scan completed with exit code: $exit_code"
+              exit $exit_code
           {{- else }}
-          command: ["/scripts/scan-all-applications.sh"]
-          args: ["--yes"]
+          # All applications scan  
+          command: ["/bin/bash"]
+          args:
+            - "-c" 
+            - |
+              set -euo pipefail
+              echo "Starting scan of all configured applications"
+              /scripts/scan-all-applications.sh --yes
+              exit_code=$?
+              echo "Scan completed with exit code: $exit_code"
+              exit $exit_code
           {{- end }}
 
           # Environment variables
@@ -140,6 +158,10 @@ spec:
               value: {{ .Values.scanTarget | quote }}
             {{- end }}
 
+            # Configuration file path
+            - name: CONFIG_FILE
+              value: "/config/applications.yaml"
+
           # Resource limits
           resources:
             {{- toYaml .Values.scanner.resources | nindent 12 }}
@@ -156,17 +178,11 @@ spec:
               mountPath: /config
               readOnly: true
 
-            # Temporary working directory
+            # Temporary working directory with sufficient space for container images
             - name: temp-storage
               mountPath: /tmp
 
-            # Docker socket (if needed for image operations)
-            {{- if .Values.scanner.dockerSocket.enabled }}
-            - name: docker-socket
-              mountPath: /var/run/docker.sock
-            {{- end }}
-
-          # Container security context - now uses values.yaml instead of hardcoded
+          # Container security context - enhanced for BDSC operations
           {{- with .Values.scanner.containerSecurityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
@@ -184,17 +200,9 @@ spec:
           configMap:
             name: {{ .Values.configMap.applications.name }}
 
-        # Temporary storage for downloads and scanning
+        # Temporary storage for downloads and scanning with adequate space
         - name: temp-storage
           emptyDir:
             sizeLimit: {{ .Values.scanner.resources.limits.ephemeralStorage | default "50Gi" }}
-
-        # Docker socket (if enabled)
-        {{- if .Values.scanner.dockerSocket.enabled }}
-        - name: docker-socket
-          hostPath:
-            path: /var/run/docker.sock
-            type: Socket
-        {{- end }}
 
 {{- end }}
