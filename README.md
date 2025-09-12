@@ -10,6 +10,7 @@ BD SelfScan enables organizations to secure their container deployments by:
 - **Discovering container images** from running pods across all namespaces
 - **Performing BDSC-based scanning** with layer-by-layer vulnerability and OSS license analysis
 - **Organizing results** in Black Duck using a microservices-friendly project structure
+- **Enforcing security policies** with per-application policy gating and build failure controls
 - **Automating scans** through Kubernetes Jobs and event-driven triggers
 
 ## 🏗️ Architecture & Design
@@ -31,28 +32,66 @@ Project Group: Acme Checkout
 └── Project: gateway-service → Versions: v87, v88
 ```
 
-### Configuration-Driven Application Mapping
+### Configuration-Driven Application Mapping with Policy Gating
 
-Applications are mapped via configuration file from `namespace + labelSelector` to Black Duck Project Groups:
+Applications are mapped via configuration file from `namespace + labelSelector` to Black Duck Project Groups, with optional per-application policy enforcement:
 
 ```yaml
 applications:
-  - name: "Black Duck SCA"
-    namespace: "bd"
-    labelSelector: "app=blackduck"  
-    projectGroup: "Black Duck SCA"
-    projectTier: 2
+  - name: "Critical Production App"
+    namespace: "production"
+    labelSelector: "app=payment-service"  
+    projectGroup: "Payment Services"
+    projectTier: 1
+    # ENHANCED: Per-application policy gating
+    policyGating: true
+    policyGatingRisk: "BLOCKER,CRITICAL,HIGH"  # Explicit policy severities
     scanOnDeploy: true    # For Phase 2 automation
+    
+  - name: "Standard Application"
+    namespace: "staging"
+    labelSelector: "app=user-service"
+    projectGroup: "User Services"
+    projectTier: 3
+    # Uses tier-based defaults: BLOCKER,CRITICAL for tier 3
+    policyGating: true
+    
+  - name: "Discovery Mode App"
+    namespace: "development"
+    labelSelector: "app=test-service"
+    projectGroup: "Development Services"
+    projectTier: 4
+    # Discovery mode - scan but never fail builds
+    policyGating: false
 ```
+
+### Policy Gating Modes
+
+BD SelfScan supports three policy enforcement modes:
+
+1. **Enforcement Mode** (`policyGating: true` with explicit `policyGatingRisk`)
+   - Scan results **WILL FAIL** builds/deployments on policy violations
+   - Custom severity thresholds per application
+   - Exit code 9 returned on policy violations
+
+2. **Tier-Based Enforcement** (`policyGating: true` without `policyGatingRisk`)
+   - Uses project tier defaults for policy severities
+   - Tier 1: BLOCKER,CRITICAL,HIGH | Tier 2: BLOCKER,CRITICAL | Tier 3: BLOCKER,CRITICAL | Tier 4: BLOCKER
+
+3. **Discovery Mode** (`policyGating: false`)
+   - Scans report vulnerabilities but **NEVER FAIL** builds
+   - Perfect for discovery phases and non-critical applications
 
 ### How BD SelfScan Works
 
 1. **Discovery**: Uses Kubernetes label selectors to find pods in target namespaces
 2. **Image Extraction**: Extracts container image references from pod specifications
-3. **Image Download**: Downloads container images using Skopeo for offline scanning
-4. **BDSC Scanning**: Performs layer-by-layer vulnerability analysis using Black Duck Signature Scanner
-5. **Project Creation**: Automatically creates/updates Black Duck projects and project groups
-6. **Result Organization**: Organizes scan results by microservice with proper versioning
+3. **Policy Configuration**: Reads per-application policy gating settings
+4. **Image Download**: Downloads container images using Skopeo for offline scanning
+5. **BDSC Scanning**: Performs layer-by-layer vulnerability analysis using Black Duck Signature Scanner
+6. **Policy Enforcement**: Evaluates scan results against configured policy thresholds
+7. **Project Creation**: Automatically creates/updates Black Duck projects and project groups
+8. **Result Organization**: Organizes scan results by microservice with proper versioning
 
 ## 📋 Implementation Status
 
@@ -64,13 +103,17 @@ applications:
 - Custom Docker image with pre-installed tools (Java, kubectl, yq, jq, skopeo)
 - Kubernetes Job template for on-demand execution
 - Configuration-driven application mapping
-- BDSC-based container scanning
+- **Per-application policy gating and enforcement**
+- BDSC-based container scanning with intelligent version detection
 - GitHub Container Registry integration
 
 **Key Features**:
 - Scan single applications or all configured applications
+- **Per-application policy gating** with custom severity thresholds
+- **Intelligent version detection** with explicit override support
 - Automatic Black Duck Project Group creation
 - Configurable resource limits and timeouts
+- **Enhanced diagnostic and testing scripts** (v2.1.0)
 - Debug mode for troubleshooting
 - Comprehensive error handling and logging
 
@@ -104,7 +147,7 @@ kubectl create secret generic blackduck-creds \
   -n bd-selfscan-system
 ```
 
-### Step 2: Configure Applications
+### Step 2: Configure Applications with Policy Gating
 Edit `configs/applications.yaml` to define your target applications:
 
 ```yaml
@@ -115,13 +158,27 @@ applications:
     projectGroup: "Black Duck SCA"
     projectTier: 2
     description: "Black Duck SCA test deployment"
+    # Enable policy gating with tier defaults
+    policyGating: true
     
-  - name: "Your Application"
-    namespace: "your-namespace"
-    labelSelector: "app=your-app"
-    projectGroup: "Your Project Group"
-    projectTier: 3
-    description: "Your application description"
+  - name: "Critical Production Service"
+    namespace: "production"
+    labelSelector: "app=payment-service"
+    projectGroup: "Payment Services"
+    projectTier: 1
+    description: "Mission-critical payment processing"
+    # Strict policy enforcement
+    policyGating: true
+    policyGatingRisk: "BLOCKER,CRITICAL,HIGH"
+    
+  - name: "Development Application"
+    namespace: "dev"
+    labelSelector: "app=test-service"
+    projectGroup: "Development Services"
+    projectTier: 4
+    description: "Development environment testing"
+    # Discovery mode - never fail builds
+    policyGating: false
 ```
 
 ### Step 3: Install BD SelfScan
@@ -137,13 +194,17 @@ kubectl get clusterrole bd-selfscan
 kubectl get clusterrolebinding bd-selfscan
 ```
 
-### Step 4: Test Installation
+### Step 4: Test Installation and Policy Configuration
 ```bash
+# Test policy gating configuration
+kubectl create job bd-policy-test --from=cronjob/bd-selfscan -n bd-selfscan-system
+kubectl exec -it job/bd-policy-test -n bd-selfscan-system -- /scripts/test-policy-gating.sh
+
 # Test scan of configured application
 helm install bd-scan-test ./bd-selfscan \
   --set scanTarget="Black Duck SCA"
 
-# Monitor progress
+# Monitor progress and policy enforcement
 kubectl get jobs -n bd-selfscan-system -w
 kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner -f
 ```
@@ -161,11 +222,29 @@ helm upgrade bd-selfscan ./bd-selfscan \
 # Scan all configured applications
 helm upgrade bd-selfscan ./bd-selfscan
 
+# Test policy gating for specific application
+helm upgrade bd-selfscan ./bd-selfscan \
+  --set scanTarget="Critical Production Service" \
+  --set debug.enabled=true
+
 # Enable debug mode for troubleshooting
 helm upgrade bd-selfscan ./bd-selfscan \
   --set scanTarget="Black Duck SCA" \
   --set debug.enabled=true \
   --set debug.logLevel=DEBUG
+```
+
+### Test Policy Gating Configuration
+```bash
+# Run policy gating configuration test
+kubectl create job bd-policy-test --from=cronjob/bd-selfscan -n bd-selfscan-system
+kubectl exec -it job/bd-policy-test -n bd-selfscan-system -- /scripts/test-policy-gating.sh
+
+# Preview policy configuration without scanning
+kubectl exec -it job/bd-policy-test -n bd-selfscan-system -- /scripts/test-policy-gating.sh /config/applications.yaml preview
+
+# Test with simulated vulnerability findings
+kubectl exec -it job/bd-policy-test -n bd-selfscan-system -- /scripts/test-policy-gating.sh /config/applications.yaml dry-run
 ```
 
 ### Update Configuration
@@ -182,16 +261,19 @@ helm upgrade bd-selfscan ./bd-selfscan
 
 ## 📊 Quick Start - Monitoring
 
-### View Scan Progress
+### View Scan Progress and Policy Results
 ```bash
 # Watch active scan jobs
 kubectl get jobs -n bd-selfscan-system -w
 
-# View real-time scan logs
+# View real-time scan logs with policy enforcement details
 kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner -f
 
-# Check scan job completion status
+# Check scan job completion status (including policy violations)
 kubectl get jobs -n bd-selfscan-system --sort-by=.metadata.creationTimestamp
+
+# Check for policy violation exits (exit code 9)
+kubectl get jobs -n bd-selfscan-system -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.conditions[*].type}{"\t"}{.status.conditions[*].reason}{"\n"}{end}'
 
 # Get detailed job information
 kubectl describe job <job-name> -n bd-selfscan-system
@@ -202,11 +284,15 @@ kubectl describe job <job-name> -n bd-selfscan-system
 # View all BD SelfScan resources
 kubectl get all -n bd-selfscan-system
 
+# Run comprehensive health check with policy testing
+kubectl create job bd-health-check --from=cronjob/bd-selfscan -n bd-selfscan-system
+kubectl exec -it job/bd-health-check -n bd-selfscan-system -- /scripts/health-check.sh
+
 # Check RBAC permissions
 kubectl get clusterrole bd-selfscan
 kubectl get clusterrolebinding bd-selfscan
 
-# Verify configuration
+# Verify configuration including policy settings
 kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml
 
 # Check recent events
@@ -225,14 +311,15 @@ kubectl top nodes
 kubectl describe pods -n bd-selfscan-system
 ```
 
-### Check Black Duck Results
+### Check Black Duck Results and Policy Enforcement
 ```bash
 # After successful scans, verify in Black Duck UI:
 echo "Navigate to your Black Duck server and check:"
 echo "1. Project Groups are created"
 echo "2. Container projects show proper versions"  
 echo "3. Vulnerability data is populated"
-echo "4. Policy violations are reported (if configured)"
+echo "4. Policy violations are reported and enforced"
+echo "5. Check for exit code 9 in job logs (policy violations detected)"
 ```
 
 ## 🔧 Technical Implementation
@@ -242,6 +329,7 @@ echo "4. Policy violations are reported (if configured)"
 - **Build**: Automated via GitHub Actions
 - **Base**: Ubuntu 22.04 with Black Duck scanning tools
 - **Tools**: Java 17, kubectl, yq, jq, skopeo, Synopsys Detect
+- **Scripts Version**: 2.1.0 with intelligent version detection and policy gating
 
 ### Security Configuration
 - **Enhanced RBAC**: Cluster-wide permissions with service account
@@ -249,17 +337,20 @@ echo "4. Policy violations are reported (if configured)"
 - **Secret Management**: Black Duck credentials stored in Kubernetes secrets
 - **Resource Limits**: Configurable CPU/memory limits for scan jobs
 
-### Key Scanning Process
+### Enhanced Scanning Process (v2.1.0)
 
 1. **Tool Setup**: Install required dependencies (kubectl, skopeo, yq, Java)
 2. **Configuration Loading**: Read application configuration from ConfigMap
-3. **Project Group Management**: Verify/create Black Duck Project Group
-4. **Pod Discovery**: Find pods using namespace and label selectors
-5. **Image Discovery**: Extract container images from pod specifications
-6. **Image Download**: Download images using Skopeo for offline scanning
-7. **BDSC Scanning**: Execute Black Duck Signature Scanner for Containers
-8. **Result Organization**: Create/update Black Duck projects with proper versioning
-9. **Cleanup**: Remove temporary files and report results
+3. **Policy Configuration**: Parse per-application policy gating settings
+4. **Project Group Management**: Verify/create Black Duck Project Group
+5. **Pod Discovery**: Find pods using namespace and label selectors
+6. **Image Discovery**: Extract container images from pod specifications with intelligent version detection
+7. **Image Download**: Download images using Skopeo for offline scanning
+8. **BDSC Scanning**: Execute Black Duck Signature Scanner for Containers
+9. **Policy Evaluation**: Check scan results against configured policy thresholds
+10. **Result Organization**: Create/update Black Duck projects with proper versioning
+11. **Exit Code Management**: Return appropriate exit codes (0=success, 9=policy violations)
+12. **Cleanup**: Remove temporary files and report results
 
 ## 📁 Project Structure
 
@@ -269,25 +360,31 @@ bd-selfscan/
 ├── values.yaml                          # Default configuration values
 ├── README.md                           # This file
 ├── configs/
-│   ├── applications.yaml              # Application configuration
+│   ├── applications.yaml              # Application configuration with policy gating
 │   └── README.md                       # Configuration guide
 ├── templates/
 │   ├── _helpers.tpl                    # Helm template helpers
 │   ├── namespace.yaml                  # System namespace
 │   ├── rbac.yaml                       # Cluster RBAC resources
 │   ├── configmap-apps.yaml            # Applications ConfigMap
-│   ├── configmap-scanner-script.yaml  # Scanner scripts
+│   ├── configmap-scanner-script.yaml  # Enhanced scanner scripts (v2.1.0)
 │   ├── job-on-demand.yaml             # On-demand scan jobs
 │   └── deployment-controller.yaml     # Phase 2 controller (planned)
 ├── scripts/
-│   ├── scan-application.sh            # Single application scanner
-│   ├── scan-all-applications.sh       # Bulk application scanner  
-│   ├── bdsc-container-scan.sh         # Core BDSC scanning logic
+│   ├── scan-application.sh            # Single application scanner (v2.1.0)
+│   ├── scan-all-applications.sh       # Bulk application scanner (v2.1.0)
+│   ├── bdsc-container-scan.sh         # Core BDSC scanning logic (v2.0.0)
+│   ├── test-policy-gating.sh          # NEW: Policy gating testing script
+│   ├── health-check.sh                # Enhanced health check with policy testing
+│   ├── common-functions.sh            # Enhanced utility functions (v2.1.0)
 │   ├── controller.py                  # Phase 2 controller (planned)
 │   └── README.md                       # Scripts documentation
+├── bin/
+│   └── diagnostic.sh                  # Enhanced diagnostic script
 └── docs/
     ├── INSTALL.md                      # Detailed installation guide
-    ├── CONFIGURATION.md               # Configuration reference
+    ├── CONFIGURATION.md               # Configuration reference with policy gating
+    ├── API.md                         # API documentation
     └── TROUBLESHOOTING.md             # Common issues and solutions
 ```
 
@@ -302,7 +399,7 @@ kubectl create secret generic blackduck-creds \
   -n bd-selfscan-system
 ```
 
-### Key Configuration Options
+### Enhanced Configuration Options with Policy Gating
 
 ```yaml
 # values.yaml highlights
@@ -331,16 +428,69 @@ debug:
   logLevel: "INFO"
   keepTempFiles: false
 
-# Scanning configuration
+# Enhanced scanning configuration with policy gating
 scanning:
   projectTier: 3
+  # Global default policy severities (overridden by per-app settings)
   policyFailSeverities: "CRITICAL,BLOCKER"
   scanTimeout: 1800
+  # Policy gating settings
+  policyGating:
+    enabled: true
+    defaultMode: "tier-based"  # tier-based, explicit, or discovery
+```
+
+### Per-Application Policy Configuration
+
+```yaml
+# Enhanced applications.yaml with policy gating
+applications:
+  # Mission-critical application with strict policies
+  - name: "Payment Service"
+    namespace: "production"
+    labelSelector: "app=payment-service"
+    projectGroup: "Payment Services"
+    projectTier: 1
+    policyGating: true
+    policyGatingRisk: "BLOCKER,CRITICAL,HIGH"
+    projectVersion: "v2.1.5"  # Explicit version override
+    description: "Critical payment processing service"
+
+  # Standard application using tier defaults  
+  - name: "User Service"
+    namespace: "staging"
+    labelSelector: "app=user-service"
+    projectGroup: "User Services"
+    projectTier: 3
+    policyGating: true  # Uses tier 3 defaults: BLOCKER,CRITICAL
+    description: "User management service"
+
+  # Development application in discovery mode
+  - name: "Test Service"
+    namespace: "development"
+    labelSelector: "app=test-service"
+    projectGroup: "Development Services"
+    projectTier: 4
+    policyGating: false  # Discovery mode - never fails
+    description: "Development testing service"
 ```
 
 ## 🔍 Troubleshooting
 
 ### Common Issues
+
+#### Policy Gating Issues
+```bash
+# Test policy gating configuration
+kubectl create job bd-policy-test --from=cronjob/bd-selfscan -n bd-selfscan-system
+kubectl exec -it job/bd-policy-test -n bd-selfscan-system -- /scripts/test-policy-gating.sh
+
+# Check for exit code 9 (policy violations)
+kubectl get jobs -n bd-selfscan-system -o yaml | grep -A5 -B5 "exitCode: 9"
+
+# Debug policy severity validation
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner | grep -i "policy"
+```
 
 #### Image Pull Errors
 ```bash
@@ -363,11 +513,16 @@ kubectl exec -it <scan-pod-name> -n bd-selfscan-system -- curl -k https://your-b
 
 #### Configuration Issues
 ```bash
-# Validate YAML syntax
+# Validate YAML syntax and policy settings
 yq eval '.applications[].name' configs/applications.yaml
+yq eval '.applications[] | select(.policyGating == true) | .name + ": " + (.policyGatingRisk // "tier-default")' configs/applications.yaml
 
 # Test label selectors find pods
 kubectl get pods -n "target-namespace" -l "app=target-app"
+
+# Run comprehensive configuration test
+kubectl create job bd-config-test --from=cronjob/bd-selfscan -n bd-selfscan-system
+kubectl exec -it job/bd-config-test -n bd-selfscan-system -- /scripts/test-config.sh
 ```
 
 ### Debug Commands
@@ -375,30 +530,44 @@ kubectl get pods -n "target-namespace" -l "app=target-app"
 # View all BD SelfScan resources
 kubectl get all -n bd-selfscan-system
 
-# Check failed jobs
+# Check failed jobs and policy violations
 kubectl get jobs -n bd-selfscan-system --field-selector status.successful=0
+kubectl get jobs -n bd-selfscan-system -o yaml | grep -C3 "exitCode: 9"
 
 # View pod events
 kubectl get events -n bd-selfscan-system --field-selector involvedObject.kind=Pod
 
-# Check configuration
+# Check configuration with policy gating details
 kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml
 
-# View detailed logs from completed job
-kubectl logs -n bd-selfscan-system job/<job-name>
+# View detailed logs from completed job with policy information
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -A10 -B10 "Policy"
+
+# Run enhanced diagnostic script
+kubectl create job bd-diagnostic --from=cronjob/bd-selfscan -n bd-selfscan-system
+kubectl exec -it job/bd-diagnostic -n bd-selfscan-system -- /bin/diagnostic.sh
 ```
+
+### Exit Codes
+- **Exit Code 0**: Scan completed successfully, no policy violations
+- **Exit Code 1**: General error (configuration, network, etc.)
+- **Exit Code 2**: Validation error (missing configuration, invalid settings)
+- **Exit Code 3**: Scan execution error
+- **Exit Code 9**: **Policy violations detected** (scan successful but policies failed)
 
 ## 🚀 Advanced Usage
 
-### Production Deployment
+### Production Deployment with Policy Gating
 ```bash
-# Production-ready deployment
+# Production-ready deployment with strict policy enforcement
 helm install bd-selfscan ./bd-selfscan \
   --namespace bd-selfscan-system \
   --create-namespace \
   --set scanner.resources.limits.memory=16Gi \
   --set scanner.resources.limits.cpu=8 \
-  --set scanning.scanTimeout=3600
+  --set scanning.scanTimeout=3600 \
+  --set scanning.policyGating.enabled=true \
+  --set scanning.policyGating.defaultMode=tier-based
 ```
 
 ### Custom Resource Limits
@@ -410,20 +579,40 @@ helm upgrade bd-selfscan ./bd-selfscan \
   --set scanner.resources.limits.ephemeralStorage=200Gi
 ```
 
-### Parallel Scanning
+### Parallel Scanning with Policy Enforcement
 ```bash
-# Use scan-all-applications.sh for parallel execution
-./scripts/scan-all-applications.sh --parallel 3 --yes
+# Use scan-all-applications.sh for parallel execution with policy gating
+kubectl create job bd-parallel-scan --from=cronjob/bd-selfscan -n bd-selfscan-system
+kubectl exec -it job/bd-parallel-scan -n bd-selfscan-system -- /scripts/scan-all-applications.sh --parallel 3 --yes --policy-check
 ```
 
-### Debug Mode
+### Debug Mode with Policy Testing
 ```bash
-# Enable comprehensive debugging
+# Enable comprehensive debugging with policy gating details
 helm upgrade bd-selfscan ./bd-selfscan \
-  --set scanTarget="Black Duck SCA" \
+  --set scanTarget="Critical Production Service" \
   --set debug.enabled=true \
   --set debug.logLevel=DEBUG \
   --set debug.keepTempFiles=true
+
+# Run policy gating tests in debug mode
+kubectl create job bd-policy-debug --from=cronjob/bd-selfscan -n bd-selfscan-system
+kubectl exec -it job/bd-policy-debug -n bd-selfscan-system -- DEBUG_ENABLED=true /scripts/test-policy-gating.sh
+```
+
+### Policy Gating Testing Scenarios
+```bash
+# Test different policy scenarios
+kubectl create job bd-policy-scenarios --from=cronjob/bd-selfscan -n bd-selfscan-system
+
+# Preview mode - show policy configuration without scanning
+kubectl exec -it job/bd-policy-scenarios -n bd-selfscan-system -- /scripts/test-policy-gating.sh /config/applications.yaml preview
+
+# Dry-run mode - simulate scans with mock vulnerabilities
+kubectl exec -it job/bd-policy-scenarios -n bd-selfscan-system -- /scripts/test-policy-gating.sh /config/applications.yaml dry-run
+
+# Live mode - test against real Black Duck server
+kubectl exec -it job/bd-policy-scenarios -n bd-selfscan-system -- /scripts/test-policy-gating.sh /config/applications.yaml live
 ```
 
 ## 🔒 Lessons Learned
@@ -433,17 +622,21 @@ helm upgrade bd-selfscan ./bd-selfscan \
 2. **Container Permissions**: Black Duck scanning requires root privileges and specific Linux capabilities
 3. **Tool Installation**: Pre-build tools in container image rather than installing at runtime
 4. **Image Distribution**: Use GitHub Container Registry for automated builds and distribution
+5. **Policy Enforcement**: Proper exit code handling for CI/CD integration (exit code 9 for policy violations)
 
 ### Kubernetes Patterns
 1. **ConfigMaps for Scripts**: Store scanning logic in ConfigMaps for easy updates without image rebuilds  
 2. **Security Contexts**: Properly configure both pod-level and container-level security contexts
 3. **Resource Management**: Set appropriate CPU/memory limits for scanning workloads
 4. **Job Management**: Use ttlSecondsAfterFinished for automatic cleanup
+5. **Policy Integration**: Handle policy violations gracefully with appropriate exit codes
 
 ### Black Duck Integration  
 1. **Project Group Management**: Automatically create project groups if they don't exist
 2. **Container Scanning**: Use BDSC (not Docker Inspector) for layer-by-layer analysis
 3. **Project Naming**: Follow consistent naming conventions for microservices architecture
+4. **Policy Enforcement**: Integrate security policies into CI/CD pipelines with clear failure modes
+5. **Version Detection**: Intelligent version detection with explicit override support
 
 ## 🛣️ Roadmap
 
@@ -451,20 +644,25 @@ helm upgrade bd-selfscan ./bd-selfscan \
 - [x] On-demand multi-application scanning
 - [x] Configuration-driven application mapping  
 - [x] BDSC Container scanning integration
+- [x] **Per-application policy gating and enforcement**
+- [x] **Intelligent version detection with explicit overrides**
 - [x] Automatic Project Group creation
+- [x] **Enhanced diagnostic and testing scripts (v2.1.0)**
 - [x] Cluster-wide RBAC and security
 
 ### Phase 2 🚧 (Planned)
 - [ ] Kubernetes controller for deployment events
-- [ ] Automated scan triggering  
+- [ ] Automated scan triggering with policy enforcement
 - [ ] Scheduled scanning with cron
 - [ ] Health checks and self-healing
+- [ ] Policy violation notifications
 
 ### Future Enhancements
-- [ ] Policy customization per application
-- [ ] Slack/Teams notification integration
+- [ ] Advanced policy customization per application
+- [ ] Slack/Teams notification integration for policy violations
 - [ ] Multi-cluster federation support
-- [ ] GitOps integration (ArgoCD/Flux)
+- [ ] GitOps integration (ArgoCD/Flux) with policy gates
+- [ ] Policy exception management workflow
 
 ## 🤝 Contributing
 
@@ -477,14 +675,15 @@ cd bd-selfscan
 # Install development dependencies
 pip install -r scripts/requirements-dev.txt
 
-# Run tests
+# Run tests including policy gating tests
 ./scripts/run-tests.sh
+./scripts/test-policy-gating.sh configs/applications.yaml dry-run
 ```
 
 ### Contribution Guidelines
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes with proper testing
+3. Make your changes with proper testing (including policy gating tests)
 4. Commit with conventional commit messages
 5. Push and create a Pull Request
 
@@ -507,4 +706,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**🔒 Made with ❤️ for secure container deployments**
+**🔒 Made with ❤️ for secure container deployments with intelligent policy enforcement**
