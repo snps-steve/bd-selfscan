@@ -69,9 +69,9 @@ configMap:
 
 # Scanner configuration with enhanced security
 scanner:
-  image: "ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest"  
-  imagePullPolicy: "IfNotPresent"
-  
+  image: "ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest"
+  imagePullPolicy: "Always"  # Changed to Always to ensure latest image with unzip fix
+
   # Resource limits and requests - optimized for performance and security
   resources:
     requests:
@@ -82,7 +82,7 @@ scanner:
       memory: "8Gi"
       cpu: "4"
       ephemeral-storage: "50Gi"
-  
+
   # Job configuration
   job:
     backoffLimit: 3
@@ -90,57 +90,46 @@ scanner:
     ttlSecondsAfterFinished: 86400  # 24 hours
     parallelism: 1
     completions: 1
-    
-    # Pod-level security context with configurable security levels
+
+    # FIXED: Pod-level security context - properly configured for Black Duck scanning
     securityContext:
-      # Security Level 1: Maximum compatibility (current default for BD requirements)
-      runAsNonRoot: false  # BD scanning may require root
-      runAsUser: 0         # Root user for container operations
-      runAsGroup: 0
-      fsGroup: 0
-      
-      # Security Level 2: Enhanced security (uncomment to use)
-      # runAsNonRoot: true   # Preferred for security
-      # runAsUser: 1000      # Non-root scanner user from Dockerfile
-      # runAsGroup: 1000
-      # fsGroup: 1000
-      # fsGroupChangePolicy: "OnRootMismatch"
-  
-  # Container security context with defense-in-depth approach
+      # Black Duck requires root privileges for container operations
+      runAsNonRoot: false    # Must be false for BD scanning
+      runAsUser: 0           # Root user required
+      runAsGroup: 0          # Root group
+      fsGroup: 0             # File system group as root
+      # Enhanced security where possible
+      seccompProfile:
+        type: RuntimeDefault
+      supplementalGroups: []
+
+  # FIXED: Container security context - minimal privileges for BD operations
   containerSecurityContext:
-    # Current permissive settings for BD compatibility
-    allowPrivilegeEscalation: false  # Prevent privilege escalation
-    readOnlyRootFilesystem: false    # BD tools need write access to temp dirs
-    runAsUser: 0                     # Override if job.securityContext.runAsUser is set
+    # Essential for Black Duck container scanning
+    allowPrivilegeEscalation: true     # Required for container operations
+    readOnlyRootFilesystem: false      # BD tools need write access
+    runAsUser: 0                       # Override Dockerfile USER scanner
+    runAsGroup: 0
+    runAsNonRoot: false               # Must be false for BD scanning
     
-    # Capability management - only grant what's needed
+    # Capability management - grant only what Black Duck needs
     capabilities:
       drop:
-        - ALL  # Drop all capabilities first
+        - ALL  # Start with minimal privileges
       add:
-        # Minimal capabilities for Black Duck operations
-        - CHOWN         # File ownership changes
-        - DAC_OVERRIDE  # Bypass file permission checks
-        - FOWNER        # Bypass permission checks for file operations
-        # Remove if not needed after testing:
-        # - SETGID      # Only if group changes are required
-        # - SETUID      # Only if user changes are required
-        # - SYS_ADMIN   # Remove if container operations work without it
-    
-    # Secure alternative configuration (test with your BD setup)
-    # allowPrivilegeEscalation: false
-    # readOnlyRootFilesystem: true   # Enable if BD tools support it
-    # runAsNonRoot: true
-    # runAsUser: 1000
-    # capabilities:
-    #   drop: ["ALL"]
-    #   add: ["DAC_OVERRIDE"]  # Minimal required capability
-  
+        - CHOWN          # Change file ownership
+        - DAC_OVERRIDE   # Bypass file read/write/execute permission checks
+        - FOWNER         # Bypass permission checks for file operations
+        - SETGID         # Set group ID
+        - SETUID         # Set user ID
+        # Add SYS_ADMIN only if container operations fail without it
+        # - SYS_ADMIN    # Uncomment if needed for advanced container operations
+
   # Node selection and scheduling
   nodeSelector: {}
   tolerations: []
   affinity: {}
-  
+
   # Advanced scheduling for production
   # nodeSelector:
   #   node-type: "scanner-nodes"  # Dedicated nodes for scanning workloads
@@ -149,7 +138,7 @@ scanner:
   #     operator: "Equal"
   #     value: "true"
   #     effect: "NoSchedule"
-  
+
   # Docker socket access (disable for enhanced security)
   dockerSocket:
     enabled: false  # Preferred: false for security
@@ -159,24 +148,24 @@ scanner:
 scanning:
   projectTier: 3
   policyFailSeverities: "CRITICAL,BLOCKER"
-  
+
   # Performance tuning
   imageDownloadTimeout: 600
   imageDownloadRetries: 3
   scanTimeout: 1800
   maxConcurrentScans: 3
   maxConcurrentDownloads: 2
-  
+
   # Cleanup and retention
   cleanupInterval: 7200
   keepSuccessfulJobs: 5
   keepFailedJobs: 10
-  
+
   # Enhanced security scanning options
   enableVulnerabilityScanning: true
   enableLicenseScanning: true
   enableOperationalRisks: true
-  
+
   # Policy enforcement
   enforceProjectTierPolicies: true
   blockDeploymentOnPolicyViolation: false  # Set to true for production enforcement
@@ -192,20 +181,20 @@ debug:
 # Monitoring and observability
 monitoring:
   enabled: true
-  
+
   # Prometheus integration
   serviceMonitor:
     enabled: false  # Set to true if Prometheus operator is available
     interval: "30s"
     scrapeTimeout: "10s"
     labels: {}
-    
+
   # Grafana dashboard
   grafana:
     enabled: false
     dashboardLabel: "grafana_dashboard"
     datasource: "Prometheus"
-    
+
   # Health checks and probes
   healthCheck:
     enabled: true
@@ -220,14 +209,14 @@ monitoring:
 # Network security configuration
 networkPolicy:
   enabled: false  # Enable for production environments
-  
+
   # Ingress rules (incoming traffic)
   ingress:
     - from: []  # Allow from any source (customize as needed)
       ports:
         - protocol: TCP
           port: 8081  # Health check port
-  
+
   # Egress rules (outgoing traffic)
   egress:
     # Allow Kubernetes API access
@@ -238,7 +227,7 @@ networkPolicy:
       ports:
         - protocol: TCP
           port: 443
-    
+
     # Allow Black Duck server access
     - to: []  # Customize with specific server endpoints
       ports:
@@ -246,7 +235,7 @@ networkPolicy:
           port: 443
         - protocol: TCP
           port: 80
-    
+
     # Allow container registry access
     - to: []
       ports:
@@ -254,7 +243,7 @@ networkPolicy:
           port: 443
         - protocol: TCP
           port: 80
-    
+
     # DNS resolution
     - to: []
       ports:
@@ -266,7 +255,7 @@ podSecurityStandards:
   enforce: "baseline"  # baseline, restricted, privileged
   audit: "restricted"
   warn: "restricted"
-  
+
   # Custom pod security policy (if needed)
   customPodSecurityPolicy:
     enabled: false
@@ -278,27 +267,27 @@ advanced:
   extraEnvVars: []
   # - name: CUSTOM_VAR
   #   value: "custom-value"
-  
+
   # Additional volumes
   extraVolumes: []
   # - name: custom-config
   #   configMap:
   #     name: custom-config-map
-  
+
   # Additional volume mounts
   extraVolumeMounts: []
   # - name: custom-config
   #   mountPath: /etc/custom
   #   readOnly: true
-  
+
   # Custom annotations
   podAnnotations: {}
   # annotation-key: "annotation-value"
-  
+
   # Priority class for pod scheduling
   priorityClassName: ""
   # priorityClassName: "high-priority"
-  
+
   # Pod disruption budget
   podDisruptionBudget:
     enabled: false
@@ -310,12 +299,12 @@ backup:
   enabled: false
   schedule: "0 2 * * *"  # Daily at 2 AM
   retention: "7d"
-  
+
   # Configuration backup
   configBackup:
     enabled: true
     includeSecrets: false  # Don't backup secrets for security
-    
+
   # Results backup (to external storage)
   resultsBackup:
     enabled: false
@@ -327,14 +316,65 @@ backup:
 # Testing and validation
 testing:
   enabled: false
-  
+
   # Test configuration validation
   validateConfig: true
   validateConnectivity: true
   validatePermissions: true
-  
+
   # Load testing
   loadTest:
     enabled: false
     concurrentScans: 5
     testDuration: "10m"
+
+# ADDED: Security context profiles for different environments
+securityProfiles:
+  # Development profile - more permissive for troubleshooting
+  development:
+    job:
+      securityContext:
+        runAsNonRoot: false
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
+    container:
+      securityContext:
+        allowPrivilegeEscalation: true
+        readOnlyRootFilesystem: false
+        runAsUser: 0
+        capabilities:
+          drop: ["ALL"]
+          add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"]
+
+  # Production profile - enhanced security where possible
+  production:
+    job:
+      securityContext:
+        runAsNonRoot: false  # Still false due to BD requirements
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+    container:
+      securityContext:
+        allowPrivilegeEscalation: true  # Required for BD
+        readOnlyRootFilesystem: false   # Required for BD
+        runAsUser: 0
+        capabilities:
+          drop: ["ALL"]
+          add: ["DAC_OVERRIDE", "FOWNER"]  # Minimal set
+
+# ADDED: Troubleshooting helpers
+troubleshooting:
+  # Enable debug pod for testing
+  debugPod:
+    enabled: false
+    image: "ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest"
+    command: ["/bin/bash", "-c", "sleep 3600"]
+
+  # Log aggregation
+  logCollection:
+    enabled: true
+    retention: "7d"
