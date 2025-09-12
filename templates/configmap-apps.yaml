@@ -1,4 +1,4 @@
-# Applications configuration ConfigMap - ENHANCED with projectVersion support
+# Applications configuration ConfigMap - ENHANCED with projectVersion and Policy Gating support
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,19 +8,19 @@ metadata:
     {{- include "bd-selfscan.labels" . | nindent 4 }}
     app.kubernetes.io/component: configuration
   annotations:
-    description: "Enhanced application configuration mapping Kubernetes applications to Black Duck Project Groups with intelligent version detection"
+    description: "Enhanced application configuration mapping Kubernetes applications to Black Duck Project Groups with intelligent version detection and per-application policy gating"
     bd-selfscan/config-type: "applications"
     bd-selfscan/version: "{{ .Chart.AppVersion | default .Chart.Version }}"
-    bd-selfscan/features: "intelligent-version-detection,explicit-overrides,auto-detection"
+    bd-selfscan/features: "intelligent-version-detection,explicit-overrides,auto-detection,policy-gating,per-application-enforcement"
 data:
   applications.yaml: |
     {{- if .Values.applications }}
-    # Applications loaded from values.yaml - ENHANCED with projectVersion support
+    # Applications loaded from values.yaml - ENHANCED with projectVersion and Policy Gating support
     applications:
     {{- toYaml .Values.applications | nindent 4 }}
     {{- else }}
     # Default applications configuration - ENHANCED VERSION
-    # Loaded from configs/applications.yaml file with projectVersion support
+    # Loaded from configs/applications.yaml file with projectVersion and Policy Gating support
     {{- (.Files.Get "configs/applications.yaml") | nindent 4 }}
     {{- end }}
     
@@ -32,13 +32,17 @@ data:
     #   labelSelector: Kubernetes label selector to find pods (supports multiple labels)
     #   projectGroup: Black Duck Project Group name (will be created if it doesn't exist)
     #
-    # Valid Black Duck Project Version Phases:
-    # - PLANNING: Early development, requirements gathering
-    # - DEVELOPMENT: Active development, testing
-    # - PRERELEASE: Pre-release testing, staging
-    # - RELEASED: Production deployment, released to users  
-    # - DEPRECATED: Legacy, being phased out
-    # - ARCHIVED: No longer maintained, archived
+    # NEW Policy Gating Fields:
+    #   policyGating: (boolean) Enable or disable policy enforcement for this application
+    #                 true = Scan can fail and block deployment if violations found
+    #                 false = Scan results reported to Black Duck but never fails
+    #                 Default: false (discovery mode)
+    #
+    #   policyGatingRisk: (string) Comma-separated severity levels that trigger failures
+    #                     Valid values: BLOCKER, CRITICAL, HIGH, MEDIUM, LOW, TRIVIAL, UNSPECIFIED
+    #                     Special values: ALL (all severities), NONE (no enforcement)
+    #                     Examples: "BLOCKER,CRITICAL", "BLOCKER", "", "ALL"
+    #                     Only used when policyGating: true
     #
     # Optional Fields:
     #   projectTier: Priority tier for scanning policies (1=Critical, 2=High, 3=Medium, 4=Low)
@@ -50,6 +54,31 @@ data:
     #   scanSchedule: Cron expression for scheduled scans (Phase 2 only)
     #   description: Human-readable description for documentation purposes
     #
+    # Valid Black Duck Project Version Phases:
+    # - PLANNING: Early development, requirements gathering
+    # - DEVELOPMENT: Active development, testing
+    # - PRERELEASE: Pre-release testing, staging
+    # - RELEASED: Production deployment, released to users  
+    # - DEPRECATED: Legacy, being phased out
+    # - ARCHIVED: No longer maintained, archived
+    #
+    # POLICY GATING EXAMPLES:
+    #   Strict (Tier 1):     policyGating: true, policyGatingRisk: "BLOCKER,CRITICAL,HIGH"
+    #   Standard (Tier 2):   policyGating: true, policyGatingRisk: "BLOCKER,CRITICAL"
+    #   Lenient (Tier 3):    policyGating: true, policyGatingRisk: "BLOCKER"
+    #   Discovery (Tier 4):  policyGating: false, policyGatingRisk: ""
+    #
+    # Valid Black Duck Severities (for policyGatingRisk):
+    #   BLOCKER:      Critical security flaws that must be fixed immediately
+    #   CRITICAL:     High-severity vulnerabilities requiring urgent attention
+    #   HIGH:         Important security issues that should be addressed soon
+    #   MEDIUM:       Moderate security concerns for longer-term planning
+    #   LOW:          Minor security issues, informational
+    #   TRIVIAL:      Very low-priority findings
+    #   UNSPECIFIED:  Issues without assigned severity
+    #   ALL:          All severity levels (maximum enforcement)
+    #   NONE:         No enforcement (equivalent to policyGating: false)
+    #
     # ENHANCED PROJECT VERSION BEHAVIOR:
     #   - If projectVersion is specified: Uses that exact version for Black Duck project
     #   - If projectVersion is empty/not specified: Auto-detects from container image tags using these rules:
@@ -60,31 +89,89 @@ data:
     #     5. Other tags -> Convert to "YYYY.MM.DD-{tag}"
     #     6. Invalid/empty -> Fallback to "YYYY.MM.DD-container"
     #
+    # Project Tiers and Recommended Policy Settings:
+    #   Tier 1 (Critical): policyGating: true, policyGatingRisk: "BLOCKER,CRITICAL,HIGH"
+    #     - Financial systems, security components, core infrastructure
+    #     - Strictest policies, all high-severity issues block deployment
+    #   
+    #   Tier 2 (High): policyGating: true, policyGatingRisk: "BLOCKER,CRITICAL"
+    #     - Customer-facing applications, important business functions
+    #     - Block on critical and blocker severity only
+    #   
+    #   Tier 3 (Medium): policyGating: true, policyGatingRisk: "BLOCKER,CRITICAL" OR false
+    #     - Standard applications, internal services (DEFAULT)
+    #     - Conservative blocking or discovery mode
+    #   
+    #   Tier 4 (Low): policyGating: false OR policyGatingRisk: "BLOCKER"
+    #     - Development tools, non-critical utilities
+    #     - Discovery mode or only block on most severe issues
+    #
     # Example Applications Configuration:
     #
     # applications:
-    #   # Example with explicit version (recommended)
+    #   # Critical Production Service - Strict Policy Enforcement
+    #   - name: "Payment Processing Service"
+    #     namespace: "payments"
+    #     labelSelector: "app=payment-processor,environment=production"
+    #     policyGating: true
+    #     policyGatingRisk: "BLOCKER,CRITICAL,HIGH"  # Strict enforcement
+    #     projectGroup: "Financial Services Critical"
+    #     projectTier: 1
+    #     projectPhase: "RELEASED"
+    #     projectVersion: "v2025.3.1"  # Explicit version
+    #     description: "Critical payment service - strict security enforcement"
+    #
+    #   # Customer-Facing API - Moderate Policy Enforcement
+    #   - name: "Customer API Gateway"
+    #     namespace: "api"
+    #     labelSelector: "app=api-gateway,tier=production"
+    #     policyGating: true
+    #     policyGatingRisk: "BLOCKER,CRITICAL"  # Moderate enforcement
+    #     projectGroup: "Customer Services"
+    #     projectTier: 2
+    #     projectPhase: "RELEASED"
+    #     # projectVersion: not specified - will auto-detect from image tags
+    #     scanOnDeploy: true
+    #     description: "Customer API with moderate security enforcement"
+    #
+    #   # Development Tool - Discovery Mode (No Enforcement)
+    #   - name: "Admin Dashboard"
+    #     namespace: "admin"
+    #     labelSelector: "app=admin-dashboard"
+    #     policyGating: false  # Discovery mode only
+    #     policyGatingRisk: ""
+    #     projectGroup: "Internal Tools"
+    #     projectTier: 4
+    #     projectPhase: "DEVELOPMENT"
+    #     scanOnDeploy: false
+    #     description: "Internal admin tool - discovery mode, no enforcement"
+    #
+    #   # Test Application - Vulnerability Testing (No Enforcement)
     #   - name: "OWASP WebGoat"
     #     namespace: "default"
     #     labelSelector: "app=webgoat-official"
+    #     policyGating: false  # Intentionally vulnerable test app
+    #     policyGatingRisk: ""
     #     projectGroup: "OWASP WebGoat Security Training"
-    #     projectTier: 2
+    #     projectTier: 4
     #     projectPhase: "DEVELOPMENT"
-    #     projectVersion: "v2025.3"  # Explicit version - overrides auto-detection
-    #     description: "OWASP WebGoat Official v2025.3"
+    #     projectVersion: "v2025.3"
+    #     description: "OWASP WebGoat - deliberately vulnerable app for testing (no enforcement)"
     #
-    #   # Example with auto-detection
-    #   - name: "Production API"
-    #     namespace: "production"
-    #     labelSelector: "app=api-gateway"
-    #     projectGroup: "Production Services"
-    #     projectTier: 1
-    #     projectPhase: "RELEASED"
-    #     # projectVersion: not specified - will auto-detect from image tags
-    #     description: "Production API Gateway - version auto-detected"
+    #   # Legacy System - Minimal Enforcement (Gradual Improvement)
+    #   - name: "Legacy Order System"
+    #     namespace: "legacy"
+    #     labelSelector: "app=order-system,version=legacy"
+    #     policyGating: true
+    #     policyGatingRisk: "BLOCKER"  # Only most severe issues
+    #     projectGroup: "Legacy Systems"
+    #     projectTier: 4
+    #     projectPhase: "DEPRECATED"
+    #     scanSchedule: "0 4 * * 0"  # Weekly Sunday 4 AM
+    #     description: "Legacy system with minimal enforcement for gradual improvement"
 
 ---
-# Enhanced Configuration validation script with projectVersion support
+# Enhanced Configuration validation script with projectVersion and Policy Gating support
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -94,15 +181,15 @@ metadata:
     {{- include "bd-selfscan.labels" . | nindent 4 }}
     app.kubernetes.io/component: configuration
   annotations:
-    description: "Enhanced configuration validation scripts with projectVersion support"
-    bd-selfscan/version: "2.0.0"
+    description: "Enhanced configuration validation scripts with projectVersion and Policy Gating support"
+    bd-selfscan/version: "2.1.0"
 data:
   validate-config.sh: |
     #!/bin/bash
     set -euo pipefail
     
-    echo "=== BD SelfScan Enhanced Configuration Validator v2.0 ==="
-    echo "Features: projectVersion validation, version detection preview"
+    echo "=== BD SelfScan Enhanced Configuration Validator v2.1 ==="
+    echo "Features: projectVersion validation, policy gating validation, version detection preview"
     
     CONFIG_FILE="/config/applications.yaml"
     
@@ -119,7 +206,7 @@ data:
     fi
     
     # Check required fields and enhanced fields
-    echo "Validating required and enhanced fields..."
+    echo "Validating required fields and policy gating configuration..."
     
     APPS_COUNT=$(yq eval '.applications | length' "$CONFIG_FILE")
     echo "Found $APPS_COUNT applications"
@@ -129,7 +216,7 @@ data:
         exit 1
     fi
     
-    # Enhanced validation for each application
+    # Enhanced validation for each application including policy gating
     for i in $(seq 0 $((APPS_COUNT - 1))); do
         APP_NAME=$(yq eval ".applications[$i].name" "$CONFIG_FILE")
         NAMESPACE=$(yq eval ".applications[$i].namespace" "$CONFIG_FILE")
@@ -138,6 +225,10 @@ data:
         PROJECT_PHASE=$(yq eval ".applications[$i].projectPhase // \"DEVELOPMENT\"" "$CONFIG_FILE")
         PROJECT_VERSION=$(yq eval ".applications[$i].projectVersion // \"\"" "$CONFIG_FILE")
         PROJECT_TIER=$(yq eval ".applications[$i].projectTier // 3" "$CONFIG_FILE")
+        
+        # NEW: Policy gating configuration
+        POLICY_GATING=$(yq eval ".applications[$i].policyGating // false" "$CONFIG_FILE")
+        POLICY_GATING_RISK=$(yq eval ".applications[$i].policyGatingRisk // \"\"" "$CONFIG_FILE")
         
         echo ""
         echo "=== Validating application: $APP_NAME ==="
@@ -200,19 +291,65 @@ data:
             echo "    app:main -> $(date '+%Y.%m.%d')-main"
         fi
         
+        # NEW: Policy gating validation
+        echo ""
+        echo "=== Policy Gating Configuration ==="
+        if [ "$POLICY_GATING" = "true" ]; then
+            echo "✓ Policy gating ENABLED for '$APP_NAME'"
+            
+            if [ -n "$POLICY_GATING_RISK" ] && [ "$POLICY_GATING_RISK" != "null" ] && [ "$POLICY_GATING_RISK" != '""' ]; then
+                echo "✓ Policy severities configured: $POLICY_GATING_RISK"
+                
+                # Validate severity values
+                VALID_SEVERITIES="BLOCKER CRITICAL HIGH MEDIUM LOW TRIVIAL UNSPECIFIED ALL NONE"
+                IFS=',' read -ra SEVERITY_ARRAY <<< "$POLICY_GATING_RISK"
+                for severity in "${SEVERITY_ARRAY[@]}"; do
+                    severity=$(echo "$severity" | xargs | tr '[:lower:]' '[:upper:]')  # Trim and normalize
+                    if echo "$VALID_SEVERITIES" | grep -qw "$severity"; then
+                        echo "  ✓ Valid severity: $severity"
+                    else
+                        echo "  WARNING: Invalid severity '$severity' (will be ignored)"
+                        echo "  Valid severities: $VALID_SEVERITIES"
+                    fi
+                done
+                
+                echo "  → Scans will FAIL on violations of: $POLICY_GATING_RISK"
+                echo "  → Build/deployment will be BLOCKED on policy violations"
+            else
+                echo "✓ Policy gating enabled with tier-based defaults (Tier $PROJECT_TIER)"
+                case "$PROJECT_TIER" in
+                    1) echo "  → Will use: BLOCKER,CRITICAL,HIGH (Tier 1 - Critical)";;
+                    2) echo "  → Will use: BLOCKER,CRITICAL (Tier 2 - High)";;
+                    3) echo "  → Will use: BLOCKER,CRITICAL (Tier 3 - Medium)";;
+                    4) echo "  → Will use: BLOCKER (Tier 4 - Low)";;
+                    *) echo "  → Will use: BLOCKER,CRITICAL (Default)";;
+                esac
+                echo "  RECOMMENDATION: Set explicit policyGatingRisk for clarity"
+            fi
+        else
+            echo "✓ Policy gating DISABLED for '$APP_NAME' (discovery mode)"
+            echo "  → Scan results will be reported but never fail"
+            echo "  → Build/deployment will NEVER be blocked"
+            echo "  → Perfect for discovery phase or testing applications"
+            
+            if [ -n "$POLICY_GATING_RISK" ] && [ "$POLICY_GATING_RISK" != "null" ] && [ "$POLICY_GATING_RISK" != '""' ]; then
+                echo "  NOTE: policyGatingRisk '$POLICY_GATING_RISK' will be ignored (policyGating: false)"
+            fi
+        fi
+        
         echo "✓ Application '$APP_NAME' validation passed"
     done
     
     echo ""
     echo "=== Enhanced configuration validation completed successfully ==="
-    echo "Features validated: required fields, project phases, project tiers, version strategy"
+    echo "Features validated: required fields, project phases, project tiers, version strategy, policy gating"
     
   test-label-selectors.sh: |
     #!/bin/bash
     set -euo pipefail
     
-    echo "=== Enhanced Label Selector Testing v2.0 ==="
-    echo "Features: pod discovery, image extraction, version preview"
+    echo "=== Enhanced Label Selector Testing v2.1 ==="
+    echo "Features: pod discovery, image extraction, version preview, policy gating preview"
     
     CONFIG_FILE="/config/applications.yaml"
     APPS_COUNT=$(yq eval '.applications | length' "$CONFIG_FILE")
@@ -225,10 +362,30 @@ data:
         NAMESPACE=$(yq eval ".applications[$i].namespace" "$CONFIG_FILE")
         LABEL_SELECTOR=$(yq eval ".applications[$i].labelSelector" "$CONFIG_FILE")
         PROJECT_VERSION=$(yq eval ".applications[$i].projectVersion // \"\"" "$CONFIG_FILE")
+        POLICY_GATING=$(yq eval ".applications[$i].policyGating // false" "$CONFIG_FILE")
+        POLICY_GATING_RISK=$(yq eval ".applications[$i].policyGatingRisk // \"\"" "$CONFIG_FILE")
+        PROJECT_TIER=$(yq eval ".applications[$i].projectTier // 3" "$CONFIG_FILE")
         
         echo "=== Testing application: $APP_NAME ==="
         echo "Namespace: $NAMESPACE"
         echo "Label Selector: $LABEL_SELECTOR"
+        
+        # NEW: Policy gating preview
+        if [ "$POLICY_GATING" = "true" ]; then
+            if [ -n "$POLICY_GATING_RISK" ] && [ "$POLICY_GATING_RISK" != "null" ] && [ "$POLICY_GATING_RISK" != '""' ]; then
+                echo "Policy Enforcement: ENABLED (fail on: $POLICY_GATING_RISK)"
+            else
+                case "$PROJECT_TIER" in
+                    1) echo "Policy Enforcement: ENABLED (Tier 1: BLOCKER,CRITICAL,HIGH)";;
+                    2) echo "Policy Enforcement: ENABLED (Tier 2: BLOCKER,CRITICAL)";;
+                    3) echo "Policy Enforcement: ENABLED (Tier 3: BLOCKER,CRITICAL)";;
+                    4) echo "Policy Enforcement: ENABLED (Tier 4: BLOCKER)";;
+                    *) echo "Policy Enforcement: ENABLED (Default: BLOCKER,CRITICAL)";;
+                esac
+            fi
+        else
+            echo "Policy Enforcement: DISABLED (discovery mode)"
+        fi
         
         # Test if namespace exists
         if ! kubectl get namespace "$NAMESPACE" > /dev/null 2>&1; then
@@ -272,6 +429,13 @@ data:
                             echo "    └── Version: $(date '+%Y.%m.%d')-$tag (auto-detected)"
                         fi
                     fi
+                    
+                    # NEW: Policy enforcement preview
+                    if [ "$POLICY_GATING" = "true" ]; then
+                        echo "    └── Policy: Will block deployment on security violations"
+                    else
+                        echo "    └── Policy: Discovery mode - never blocks deployment"
+                    fi
                 fi
             done; then
                 :
@@ -284,85 +448,100 @@ data:
     done
     
     echo "=== Enhanced label selector testing completed ==="
-    echo "Next steps: Run actual scan to test version detection in practice"
+    echo "Next steps: Run actual scan to test version detection and policy enforcement"
     
-  version-detection-preview.sh: |
+  policy-gating-preview.sh: |
     #!/bin/bash
     set -euo pipefail
     
-    echo "=== BD SelfScan Version Detection Preview ==="
-    echo "Shows how different image tags will be converted to Black Duck project versions"
+    echo "=== BD SelfScan Policy Gating Preview ==="
+    echo "Shows per-application policy enforcement configuration"
     echo ""
     
-    # Test cases for common image tag patterns
-    test_images=(
-        "webgoat/webgoat:latest"
-        "nginx:1.21.6"
-        "postgres:13"
-        "myapp:v2.1.3"
-        "service:20250912" 
-        "api:build-123456"
-        "app:main"
-        "tool:v1.0.0-rc1"
-        "redis:7.0.5-alpine"
-        "ubuntu:22.04"
-    )
+    CONFIG_FILE="/config/applications.yaml"
+    APPS_COUNT=$(yq eval '.applications | length' "$CONFIG_FILE" 2>/dev/null || echo "0")
     
-    echo "Image Tag Conversion Examples:"
-    echo "=============================="
-    printf "%-30s -> %-30s %s\n" "Container Image" "Black Duck Version" "Detection Method"
-    echo "$(printf '%*s' 90 '' | tr ' ' '-')"
+    if [ "$APPS_COUNT" -eq 0 ]; then
+        echo "ERROR: No applications found in configuration"
+        exit 1
+    fi
     
-    for image in "${test_images[@]}"; do
-        # Extract tag
-        if [[ "$image" == *":"* ]]; then
-            tag="${image##*:}"
-        else
-            tag="latest"
-        fi
+    echo "Policy Enforcement Configuration Summary:"
+    echo "========================================"
+    printf "%-30s %-15s %-25s %s\n" "Application Name" "Enforcement" "Policy Severities" "Description"
+    echo "$(printf '%*s' 100 '' | tr ' ' '-')"
+    
+    DISCOVERY_COUNT=0
+    ENFORCEMENT_COUNT=0
+    
+    for i in $(seq 0 $((APPS_COUNT - 1))); do
+        APP_NAME=$(yq eval ".applications[$i].name" "$CONFIG_FILE")
+        POLICY_GATING=$(yq eval ".applications[$i].policyGating // false" "$CONFIG_FILE")
+        POLICY_GATING_RISK=$(yq eval ".applications[$i].policyGatingRisk // \"\"" "$CONFIG_FILE")
+        PROJECT_TIER=$(yq eval ".applications[$i].projectTier // 3" "$CONFIG_FILE")
+        DESCRIPTION=$(yq eval ".applications[$i].description // \"\"" "$CONFIG_FILE")
         
-        # Apply version detection logic (simplified for preview)
-        if [[ "$tag" == "latest" ]]; then
-            version="$(date '+%Y.%m.%d')-latest"
-            method="Latest tag conversion"
-        elif [[ "$tag" =~ ^v?([0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9.-]+)?)$ ]]; then
-            version="${tag#v}"
-            method="Semantic version"
-        elif [[ "$tag" =~ ^[0-9]{8}$ ]]; then
-            version="$(echo "$tag" | sed 's/\([0-9][0-9][0-9][0-9]\)\([0-9][0-9]\)\([0-9][0-9]\)/\1.\2.\3/')"
-            method="Date conversion"
-        elif [[ "$tag" =~ ^[0-9]{6,}$ ]]; then
-            version="build-$tag"
-            method="Build ID"
-        elif [[ "$tag" =~ ^(main|master|develop|development)$ ]]; then
-            version="$(date '+%Y.%m.%d')-$tag"
-            method="Branch conversion"
-        elif [[ "$tag" =~ (rc|alpha|beta|snapshot) ]]; then
-            version="$(date '+%Y.%m.%d')-$tag"
-            method="Pre-release conversion"
-        else
-            clean_tag=$(echo "$tag" | sed 's/[^a-zA-Z0-9._-]/-/g' | sed 's/--*/-/g')
-            version="$(date '+%Y.%m.%d')-$clean_tag"
-            method="Generic conversion"
-        fi
+        # Truncate long names/descriptions for display
+        DISPLAY_NAME=$(echo "$APP_NAME" | cut -c1-28)
+        DISPLAY_DESC=$(echo "$DESCRIPTION" | cut -c1-40)
         
-        printf "%-30s -> %-30s %s\n" "$image" "$version" "$method"
+        if [ "$POLICY_GATING" = "true" ]; then
+            ((ENFORCEMENT_COUNT++))
+            
+            if [ -n "$POLICY_GATING_RISK" ] && [ "$POLICY_GATING_RISK" != "null" ] && [ "$POLICY_GATING_RISK" != '""' ]; then
+                printf "%-30s %-15s %-25s %s\n" "$DISPLAY_NAME" "ENABLED" "$POLICY_GATING_RISK" "$DISPLAY_DESC"
+            else
+                # Use tier defaults
+                case "$PROJECT_TIER" in
+                    1) TIER_POLICY="BLOCKER,CRITICAL,HIGH";;
+                    2) TIER_POLICY="BLOCKER,CRITICAL";;
+                    3) TIER_POLICY="BLOCKER,CRITICAL";;
+                    4) TIER_POLICY="BLOCKER";;
+                    *) TIER_POLICY="BLOCKER,CRITICAL";;
+                esac
+                printf "%-30s %-15s %-25s %s\n" "$DISPLAY_NAME" "ENABLED (T$PROJECT_TIER)" "$TIER_POLICY" "$DISPLAY_DESC"
+            fi
+        else
+            ((DISCOVERY_COUNT++))
+            printf "%-30s %-15s %-25s %s\n" "$DISPLAY_NAME" "DISABLED" "Discovery Mode" "$DISPLAY_DESC"
+        fi
     done
     
     echo ""
-    echo "Key Benefits:"
-    echo "============="
-    echo "✓ Eliminates FAILURE_BLACKDUCK_FEATURE_ERROR caused by 'latest' tag"
-    echo "✓ Produces meaningful, consistent Black Duck project versions"  
-    echo "✓ Handles semantic versions, build IDs, dates, and generic tags"
-    echo "✓ Supports explicit version overrides via projectVersion config"
+    echo "Policy Enforcement Summary:"
+    echo "=========================="
+    echo "Total Applications: $APPS_COUNT"
+    echo "Enforcement Enabled: $ENFORCEMENT_COUNT"
+    echo "Discovery Mode: $DISCOVERY_COUNT"
+    
+    if [ $ENFORCEMENT_COUNT -gt 0 ]; then
+        echo ""
+        echo "Applications with Policy Enforcement:"
+        echo "  → Scans can FAIL on policy violations"
+        echo "  → Build/deployment will be BLOCKED on violations"
+        echo "  → Security vulnerabilities must be resolved or exceptions granted"
+    fi
+    
+    if [ $DISCOVERY_COUNT -gt 0 ]; then
+        echo ""
+        echo "Applications in Discovery Mode:"
+        echo "  → Scans always succeed regardless of findings"
+        echo "  → Security data collected for visibility and reporting"
+        echo "  → Perfect for legacy systems and testing environments"
+    fi
+    
     echo ""
-    echo "Configuration Options:"
-    echo "====================="
-    echo "1. Explicit Version (recommended for production):"
-    echo "   projectVersion: \"v2025.3\""
-    echo "   -> Always uses exactly \"v2025.3\" regardless of image tag"
+    echo "Policy Enforcement Migration Path:"
+    echo "================================="
+    echo "Phase 1: All applications in discovery mode (policyGating: false)"
+    echo "Phase 2: Enable enforcement on non-critical apps (policyGatingRisk: 'BLOCKER')"
+    echo "Phase 3: Gradually tighten policies based on application criticality"
+    echo "Phase 4: Full enforcement aligned with business risk tolerance"
+    
     echo ""
-    echo "2. Auto-Detection (good for CI/CD pipelines):"
-    echo "   # projectVersion: not specified"
-    echo "   -> Intelligently converts image tags as shown above"
+    echo "Next Steps:"
+    echo "==========="
+    echo "1. Review policy configuration above"
+    echo "2. Test with: kubectl exec -it <pod> -- /scripts/test-config.sh"
+    echo "3. Run sample scans to validate behavior"
+    echo "4. Adjust policyGating and policyGatingRisk as needed"

@@ -1,12 +1,12 @@
 #!/bin/bash
-# BD SelfScan Single Application Scanner - ENHANCED VERSION
+# BD SelfScan Single Application Scanner - ENHANCED VERSION with Policy Gating
 # 
 # Purpose: Wrapper script that scans a single application by name from configuration
-# Features: Enhanced version detection with explicit override support
+# Features: Enhanced version detection with explicit override support + Per-Application Policy Gating
 # Usage: ./scan-application.sh "Application Name"
 #        ./scan-application.sh "App Name" "namespace" "labelSelector" "projectGroup"
 #
-# Version: 2.0.0 with intelligent version detection
+# Version: 2.1.0 with intelligent version detection and policy gating
 # Author: BD SelfScan Team
 
 set -euo pipefail
@@ -14,7 +14,7 @@ set -euo pipefail
 # Script metadata
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_VERSION="2.1.0"
 
 # Default configuration
 export CONFIG_FILE="${CONFIG_FILE:-/config/applications.yaml}"
@@ -73,7 +73,7 @@ log_section() {
 show_usage() {
     cat << EOF
 BD SelfScan Single Application Scanner v${SCRIPT_VERSION}
-Scans a single application by name from configuration with enhanced version detection.
+Scans a single application by name from configuration with enhanced version detection and policy gating.
 
 USAGE:
     $SCRIPT_NAME "Application Name"
@@ -105,11 +105,18 @@ VERSION DETECTION:
     - If projectVersion not specified: Auto-detects from container image tags
     - Handles problematic tags like 'latest' intelligently
 
+POLICY GATING (NEW):
+    - Per-application policy enforcement control
+    - policyGating: true/false (enable/disable enforcement)
+    - policyGatingRisk: severity levels that cause failures
+    - Discovery mode vs. enforcement mode per application
+
 EXIT CODES:
     0  - Success
     1  - Configuration error or application not found
     2  - Validation failure  
     3  - Scanning failure
+    9  - Policy violation failure (when enforcement enabled)
 
 EOF
 }
@@ -171,7 +178,7 @@ validate_environment() {
     return 0
 }
 
-# ENHANCED: Function to read application configuration with projectVersion support
+# ENHANCED: Function to read application configuration with projectVersion AND policy gating support
 read_application_config() {
     local app_name="$1"
     
@@ -228,6 +235,44 @@ read_application_config() {
         log_info "No explicit project version configured - will auto-detect from container image tags"
     fi
     
+    # NEW: Read per-application policy gating configuration
+    local policy_gating
+    local policy_gating_risk
+    policy_gating=$(yq e ".applications[] | select(.name == \"$app_name\") | .policyGating // false" "$CONFIG_FILE" 2>/dev/null)
+    policy_gating_risk=$(yq e ".applications[] | select(.name == \"$app_name\") | .policyGatingRisk // \"\"" "$CONFIG_FILE" 2>/dev/null)
+    
+    # Process policy gating settings
+    log_section "=== Policy Gating Configuration ==="
+    if [[ "$policy_gating" == "true" && -n "$policy_gating_risk" && "$policy_gating_risk" != "null" && "$policy_gating_risk" != '""' ]]; then
+        # Per-application policy enforcement enabled with explicit severities
+        export POLICY_FAIL_SEVERITIES="$policy_gating_risk"
+        log_info "Policy gating ENABLED for '$app_name'"
+        log_info "  Policy severities: $POLICY_FAIL_SEVERITIES"
+        log_info "  Scan will FAIL on violations of: $POLICY_FAIL_SEVERITIES"
+        log_info "  Build/deployment will be BLOCKED on policy violations"
+    elif [[ "$policy_gating" == "true" ]]; then
+        # Policy gating enabled but no severities specified - use tier defaults
+        case "$PROJECT_TIER" in
+            1) export POLICY_FAIL_SEVERITIES="BLOCKER,CRITICAL,HIGH";;
+            2) export POLICY_FAIL_SEVERITIES="BLOCKER,CRITICAL";;
+            3) export POLICY_FAIL_SEVERITIES="BLOCKER,CRITICAL";;
+            4) export POLICY_FAIL_SEVERITIES="BLOCKER";;
+            *) export POLICY_FAIL_SEVERITIES="BLOCKER,CRITICAL";;
+        esac
+        log_info "Policy gating ENABLED for '$app_name' (using Tier $PROJECT_TIER defaults)"
+        log_info "  Policy severities: $POLICY_FAIL_SEVERITIES"
+        log_warning "  Recommendation: Explicitly set policyGatingRisk in configuration"
+        log_info "  Build/deployment will be BLOCKED on policy violations"
+    else
+        # Policy gating disabled - discovery mode only
+        unset POLICY_FAIL_SEVERITIES 2>/dev/null || true
+        export POLICY_FAIL_SEVERITIES=""
+        log_info "Policy gating DISABLED for '$app_name' (discovery mode)"
+        log_info "  Scan results will be reported to Black Duck but never fail"
+        log_info "  Build/deployment will NEVER be blocked by security findings"
+        log_info "  Perfect for discovery phase or non-critical applications"
+    fi
+    
     # Read optional description
     local app_description
     app_description=$(yq e ".applications[] | select(.name == \"$app_name\") | .description // \"\"" "$CONFIG_FILE" 2>/dev/null)
@@ -268,7 +313,20 @@ read_application_config() {
         export PROJECT_TIER="3"
     fi
     
+    # Validate policy gating risk severities if specified
+    if [[ -n "${POLICY_FAIL_SEVERITIES:-}" ]]; then
+        local valid_severities="BLOCKER CRITICAL HIGH MEDIUM LOW TRIVIAL UNSPECIFIED ALL NONE"
+        IFS=',' read -ra severity_array <<< "$POLICY_FAIL_SEVERITIES"
+        for severity in "${severity_array[@]}"; do
+            severity=$(echo "$severity" | tr '[:lower:]' '[:upper:]' | xargs) # Normalize and trim
+            if [[ ! " $valid_severities " =~ " $severity " ]]; then
+                log_warning "Invalid policy severity '$severity' - will be ignored"
+            fi
+        done
+    fi
+    
     log_success "Configuration loaded successfully"
+    log_section "=== Application Configuration Summary ==="
     log_info "  Application: $app_name"
     log_info "  Namespace: $TARGET_NS"
     log_info "  Label Selector: $LABEL_SELECTOR" 
@@ -280,6 +338,11 @@ read_application_config() {
         log_info "  Explicit Version: $BD_PROJECT_VERSION_OVERRIDE"
     else
         log_info "  Version Detection: Auto-detect from image tags"
+    fi
+    if [[ -n "${POLICY_FAIL_SEVERITIES:-}" ]]; then
+        log_info "  Policy Enforcement: ENABLED ($POLICY_FAIL_SEVERITIES)"
+    else
+        log_info "  Policy Enforcement: DISABLED (discovery mode)"
     fi
     if [[ -n "${APPLICATION_DESCRIPTION:-}" ]]; then
         log_info "  Description: $APPLICATION_DESCRIPTION"
@@ -344,7 +407,7 @@ validate_target() {
     return 0
 }
 
-# Function to execute the container scan
+# ENHANCED: Function to execute the container scan with policy gating support
 execute_scan() {
     local app_name="${1:-unknown}"
     
@@ -353,6 +416,11 @@ execute_scan() {
     log_info "Namespace: $TARGET_NS"
     log_info "Label Selector: $LABEL_SELECTOR"
     log_info "Project Group: $DESIRED_PROJECT_GROUP"
+    if [[ -n "${POLICY_FAIL_SEVERITIES:-}" ]]; then
+        log_info "Policy Enforcement: ENABLED (fail on: $POLICY_FAIL_SEVERITIES)"
+    else
+        log_info "Policy Enforcement: DISABLED (discovery mode)"
+    fi
 
     # Find the core scanner script
     local scanner_script="/scripts/bdsc-container-scan.sh"
@@ -378,7 +446,7 @@ execute_scan() {
         }
     fi
 
-    # Set up environment for the scanner
+    # Set up environment for the scanner (including policy gating settings)
     export BD_URL="${BD_URL:-}"
     export BD_TOKEN="${BD_TOKEN:-}"
     export TRUST_CERT="${TRUST_CERT:-true}"
@@ -386,6 +454,9 @@ execute_scan() {
     
     # CRITICAL: Export the application name for proper project naming
     export APPLICATION_NAME="$app_name"
+    
+    # NEW: Policy gating environment variable is already set by read_application_config
+    # POLICY_FAIL_SEVERITIES is exported with per-application settings
 
     # Validate required environment variables
     if [[ -z "$BD_URL" ]] || [[ -z "$BD_TOKEN" ]]; then
@@ -397,9 +468,9 @@ execute_scan() {
         return 1
     fi
 
-    log_info "Executing container scan..."
+    log_info "Executing container scan with enhanced policy controls..."
     log_debug "Scanner script: $scanner_script"
-    log_debug "Environment configured for Black Duck integration"
+    log_debug "Policy enforcement: ${POLICY_FAIL_SEVERITIES:-'DISABLED (discovery mode)'}"
 
     # Execute the scanner with proper error handling
     local start_time end_time duration exit_code=0
@@ -408,13 +479,32 @@ execute_scan() {
     if "$scanner_script"; then
         end_time=$(date +%s)
         duration=$((end_time - start_time))
-        log_success "Container scan completed successfully (${duration}s)"
+        
+        # Enhanced success logging with policy context
+        if [[ -n "${POLICY_FAIL_SEVERITIES:-}" ]]; then
+            log_success "Container scan completed successfully (${duration}s) - Policy enforcement PASSED"
+            log_info "No policy violations found at severity levels: $POLICY_FAIL_SEVERITIES"
+        else
+            log_success "Container scan completed successfully (${duration}s) - Discovery mode"
+            log_info "Scan results reported to Black Duck for visibility"
+        fi
         return 0
     else
         exit_code=$?
         end_time=$(date +%s)
         duration=$((end_time - start_time))
-        log_error "Container scan failed (${duration}s, exit code: $exit_code)"
+        
+        # Enhanced error handling with policy context
+        if [[ -n "${POLICY_FAIL_SEVERITIES:-}" ]]; then
+            log_error "Container scan failed (${duration}s, exit code: $exit_code) - Policy enforcement FAILED"
+            log_error "Policy violations found at severity levels: $POLICY_FAIL_SEVERITIES"
+            log_info "To disable policy enforcement for this application:"
+            log_info "  Set policyGating: false in applications.yaml for '$app_name'"
+            log_info "To make policy enforcement more lenient:"
+            log_info "  Adjust policyGatingRisk (e.g., 'BLOCKER' only) in applications.yaml"
+        else
+            log_error "Container scan failed (${duration}s, exit code: $exit_code) - Technical failure in discovery mode"
+        fi
         
         # Provide troubleshooting guidance based on exit code
         case $exit_code in
@@ -425,12 +515,27 @@ execute_scan() {
                 log_info "  2. Check if project version is valid (not 'latest' or empty)"
                 log_info "  3. Verify Black Duck server version compatibility"
                 ;;
-            1|2)
+            9)
+                log_error "FAILURE_POLICY_VIOLATION - Security policy violations detected"
+                if [[ -n "${POLICY_FAIL_SEVERITIES:-}" ]]; then
+                    log_info "Policy enforcement is ENABLED for severity levels: $POLICY_FAIL_SEVERITIES"
+                    log_info "Options to resolve:"
+                    log_info "  1. Fix the security vulnerabilities in your application"
+                    log_info "  2. Set policyGating: false to switch to discovery mode"
+                    log_info "  3. Adjust policyGatingRisk to be more lenient (e.g., 'BLOCKER' only)"
+                    log_info "  4. Create security exceptions in Black Duck for accepted risks"
+                else
+                    log_info "Unexpected policy failure in discovery mode - check configuration"
+                fi
+                ;;
+            1|2|3)
                 log_error "General scanning failure"
                 log_info "Check scanner logs for specific error details"
+                log_info "Enable DEBUG_ENABLED=true for detailed troubleshooting information"
                 ;;
             *)
                 log_error "Unexpected exit code: $exit_code"
+                log_info "Enable DEBUG_ENABLED=true for detailed troubleshooting information"
                 ;;
         esac
         
@@ -520,6 +625,8 @@ cleanup() {
     
     if [[ $exit_code -eq 0 ]]; then
         log_success "Scan application completed successfully"
+    elif [[ $exit_code -eq 9 ]]; then
+        log_warning "Scan application completed with policy violations (exit code: $exit_code)"
     else
         log_warning "Scan application exited with code $exit_code"
     fi
@@ -533,6 +640,7 @@ trap cleanup EXIT INT TERM
 # Main function
 main() {
     log_section "=== BD SelfScan - Single Application Scanner v${SCRIPT_VERSION} ==="
+    log_info "Enhanced with per-application policy gating control"
     
     # Parse command line arguments
     if ! parse_arguments "$@"; then
@@ -547,7 +655,7 @@ main() {
         return 1
     fi
     
-    # Read application configuration (unless overridden)
+    # Read application configuration (unless overridden) - now includes policy gating
     if [[ -z "${TARGET_NS:-}" ]] || [[ -z "${LABEL_SELECTOR:-}" ]] || [[ -z "${DESIRED_PROJECT_GROUP:-}" ]]; then
         if ! read_application_config "$APPLICATION_NAME"; then
             return 1
@@ -555,9 +663,12 @@ main() {
     else
         log_info "Using command-line overrides, skipping configuration file"
         export BD_VERSION_SOURCE="cli"
+        # For CLI overrides, default to discovery mode (no policy gating)
+        export POLICY_FAIL_SEVERITIES=""
         log_info "  Namespace: $TARGET_NS"
         log_info "  Label Selector: $LABEL_SELECTOR"
         log_info "  Project Group: $DESIRED_PROJECT_GROUP"
+        log_info "  Policy Gating: DISABLED (CLI override mode defaults to discovery)"
     fi
     
     # Validate scan target
@@ -565,7 +676,7 @@ main() {
         return 2
     fi
     
-    # Execute the container scan
+    # Execute the container scan with policy gating support
     if ! execute_scan "$APPLICATION_NAME"; then
         return 3
     fi

@@ -1,4 +1,4 @@
-# Scanner Scripts ConfigMap - ENHANCED with Intelligent Version Detection
+# Scanner Scripts ConfigMap - ENHANCED with Intelligent Version Detection and Policy Gating
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,933 +8,946 @@ metadata:
     {{- include "bd-selfscan.labels" . | nindent 4 }}
     app.kubernetes.io/component: scanner-scripts
   annotations:
-    description: "Enhanced scanner scripts for BD SelfScan container vulnerability scanning with intelligent version detection"
+    description: "Enhanced scanner scripts for BD SelfScan container vulnerability scanning with intelligent version detection and per-application policy gating"
     bd-selfscan/config-type: "scripts"
     bd-selfscan/version: "{{ .Chart.AppVersion | default .Chart.Version }}"
-    bd-selfscan/features: "intelligent-version-detection,explicit-overrides,auto-detection,latest-tag-fix"
+    bd-selfscan/features: "intelligent-version-detection,explicit-overrides,auto-detection,latest-tag-fix,policy-gating,per-application-enforcement"
 data:
   # ENHANCED: Core BDSC Container scanning engine with intelligent version detection (v2.0.0)
   # Features: Fixes FAILURE_BLACKDUCK_FEATURE_ERROR, handles "latest" tag conversion, 9 detection strategies
   bdsc-container-scan.sh: |
     {{- .Files.Get "scripts/bdsc-container-scan.sh" | nindent 4 }}
   
-  # ENHANCED: Single application wrapper with projectVersion support (v2.0.0)
-  # Features: Reads projectVersion from config, supports explicit overrides and auto-detection
+  # ENHANCED: Single application wrapper with projectVersion support and Policy Gating (v2.1.0)
+  # Features: Reads projectVersion from config, supports explicit overrides, auto-detection, per-app policy enforcement
   scan-application.sh: |
-    {{- .Files.Get "scripts/scan-application.sh" | nindent 4 }}
-  
-  # ENHANCED: Bulk application scanner with version reporting (v2.0.0)
-  # Features: Shows version strategy for each application, enhanced parallel scanning
-  scan-all-applications.sh: |
-    {{- .Files.Get "scripts/scan-all-applications.sh" | nindent 4 }}
-  
-  # ENHANCED: Common utility functions with version detection support (v2.0.0)
-  common-functions.sh: |
     #!/bin/bash
-    # Enhanced common utility functions for BD SelfScan scripts - v2.0.0
-    # Features: Intelligent version detection, project version validation, enhanced logging
-    
+    # BD SelfScan Single Application Scanner - ENHANCED VERSION with Policy Gating
+    # 
+    # Purpose: Wrapper script that scans a single application by name from configuration
+    # Features: Enhanced version detection with explicit override support + Per-Application Policy Gating
+    # Usage: ./scan-application.sh "Application Name"
+    #        ./scan-application.sh "App Name" "namespace" "labelSelector" "projectGroup"
+    #
+    # Version: 2.1.0 with intelligent version detection and policy gating
+    # Author: BD SelfScan Team
+
+    set -euo pipefail
+
     # Script metadata
-    export COMMON_FUNCTIONS_VERSION="2.0.0"
-    export ENHANCED_FEATURES="intelligent-version-detection,explicit-overrides,auto-detection,latest-tag-fix"
-    
-    # Color codes for consistent logging (with terminal detection)
+    readonly SCRIPT_NAME="$(basename "$0")"
+    readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    readonly SCRIPT_VERSION="2.1.0"
+
+    # Default configuration
+    export CONFIG_FILE="${CONFIG_FILE:-/config/applications.yaml}"
+    export DEBUG_ENABLED="${DEBUG_ENABLED:-false}"
+    export APPLICATION_NAME=""
+
+    # Color codes for logging (if terminal supports it)
     if [[ -t 2 ]]; then
-        export RED='\033[0;31m'
-        export GREEN='\033[0;32m'
-        export YELLOW='\033[1;33m'
-        export BLUE='\033[0;34m'
-        export PURPLE='\033[0;35m'
-        export CYAN='\033[0;36m'
-        export NC='\033[0m'
+        readonly RED='\033[0;31m'
+        readonly GREEN='\033[0;32m'
+        readonly YELLOW='\033[1;33m'
+        readonly BLUE='\033[0;34m'
+        readonly PURPLE='\033[0;35m'
+        readonly CYAN='\033[0;36m'
+        readonly NC='\033[0m'
     else
-        export RED=''
-        export GREEN=''
-        export YELLOW=''
-        export BLUE=''
-        export PURPLE=''
-        export CYAN=''
-        export NC=''
+        readonly RED=''
+        readonly GREEN=''
+        readonly YELLOW=''
+        readonly BLUE=''
+        readonly PURPLE=''
+        readonly CYAN=''
+        readonly NC=''
     fi
-    
-    # Enhanced logging functions with timestamps
-    log_info() { 
+
+    # Logging functions with enhanced formatting
+    log_info() {
         echo -e "${BLUE}[INFO]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
     }
-    
-    log_success() { 
+
+    log_success() {
         echo -e "${GREEN}[SUCCESS]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
     }
-    
-    log_warning() { 
+
+    log_warning() {
         echo -e "${YELLOW}[WARNING]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
     }
-    
-    log_error() { 
+
+    log_error() {
         echo -e "${RED}[ERROR]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
     }
-    
-    log_debug() { 
-        [[ "${DEBUG_ENABLED:-false}" == "true" ]] && echo -e "${PURPLE}[DEBUG]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
+
+    log_debug() {
+        if [[ "$DEBUG_ENABLED" == "true" ]]; then
+            echo -e "${PURPLE}[DEBUG]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
+        fi
     }
-    
-    log_section() { 
-        echo -e "\n${CYAN}$*${NC}" >&2
+
+    log_section() {
+        echo "" >&2
+        echo -e "${CYAN}$*${NC}" >&2
+        echo "" >&2
     }
-    
-    # ENHANCED: Version detection utility functions
-    is_semantic_version() {
-        local tag="$1"
-        [[ "$tag" =~ ^v?([0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9.-]+)?)$ ]]
+
+    # Function to display script usage
+    show_usage() {
+        cat << EOF
+    BD SelfScan Single Application Scanner v${SCRIPT_VERSION}
+    Scans a single application by name from configuration with enhanced version detection and policy gating.
+
+    USAGE:
+        $SCRIPT_NAME "Application Name"
+        $SCRIPT_NAME "App Name" "namespace" "labelSelector" "projectGroup"
+
+    PARAMETERS:
+        Application Name    - Name of application from applications.yaml (required)
+        namespace          - Override namespace (optional)  
+        labelSelector      - Override label selector (optional)
+        projectGroup       - Override project group (optional)
+
+    ENVIRONMENT VARIABLES:
+        APP_NAME           - Alternative to CLI argument for application name
+        CONFIG_FILE        - Path to applications.yaml (default: /config/applications.yaml)
+        DEBUG_ENABLED      - Enable debug logging (true/false, default: false)
+        BD_URL             - Black Duck server URL (required)
+        BD_TOKEN           - Black Duck API token (required)
+        TRUST_CERT         - Trust SSL certificates (default: true)
+
+    EXAMPLES:
+        $SCRIPT_NAME "OWASP WebGoat"
+        $SCRIPT_NAME "Production API" "prod-ns" "app=api-gateway" "Production Services"
+        
+        export APP_NAME="Development App"
+        $SCRIPT_NAME
+
+    VERSION DETECTION:
+        - If projectVersion is specified in config: Uses exact version
+        - If projectVersion not specified: Auto-detects from container image tags
+        - Handles problematic tags like 'latest' intelligently
+
+    POLICY GATING (NEW):
+        - Per-application policy enforcement control
+        - policyGating: true/false (enable/disable enforcement)
+        - policyGatingRisk: severity levels that cause failures
+        - Discovery mode vs. enforcement mode per application
+
+    EXIT CODES:
+        0  - Success
+        1  - Configuration error or application not found
+        2  - Validation failure  
+        3  - Scanning failure
+        9  - Policy violation failure (when enforcement enabled)
+
+    EOF
     }
-    
-    is_build_number() {
-        local tag="$1"
-        [[ "$tag" =~ ^[0-9]{6,}$ ]]
-    }
-    
-    is_date_format() {
-        local tag="$1"
-        [[ "$tag" =~ ^[0-9]{8}$ ]]
-    }
-    
-    is_branch_name() {
-        local tag="$1"
-        [[ "$tag" =~ ^(main|master|develop|development)$ ]]
-    }
-    
-    is_ci_build_number() {
-        local tag="$1"
-        [[ "$tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)$ ]]
-    }
-    
-    is_prerelease_tag() {
-        local tag="$1"
-        [[ "$tag" =~ (rc|alpha|beta|snapshot) ]]
-    }
-    
-    # ENHANCED: Project version utilities with Black Duck compatibility
-    sanitize_version() {
-        local version="$1"
-        # Sanitize version for Black Duck compatibility (alphanumeric, dots, dashes, underscores only)
-        echo "$version" | sed 's/[^a-zA-Z0-9._-]/-/g' | sed 's/--*/-/g' | sed 's/^-\+\|-\+$//g'
-    }
-    
-    validate_version_string() {
-        local version="$1"
-        # Check if version meets Black Duck requirements
-        if [[ -z "$version" ]] || [[ ${#version} -gt 100 ]] || [[ "$version" =~ ^[[:space:]]*$ ]]; then
+
+    # ENHANCED: Function to read application configuration with projectVersion AND policy gating support
+    read_application_config() {
+        local app_name="$1"
+        
+        if [[ ! -f "$CONFIG_FILE" ]]; then
+            log_error "Configuration file not found: $CONFIG_FILE"
+            log_info "Expected configuration file locations:"
+            log_info "  - /config/applications.yaml (default)"
+            log_info "  - Set CONFIG_FILE environment variable to custom location"
             return 1
         fi
-        return 0
-    }
-    
-    generate_fallback_version() {
-        echo "$(date '+%Y.%m.%d')-container"
-    }
-    
-    generate_date_based_version() {
-        local suffix="${1:-latest}"
-        echo "$(date '+%Y.%m.%d')-$suffix"
-    }
-    
-    # ENHANCED: Intelligent version detection (core logic used by scripts)
-    detect_version_from_tag() {
-        local image_tag="$1"
-        local version=""
-        local method=""
         
-        if [[ -z "$image_tag" ]]; then
-            version=$(generate_fallback_version)
-            method="empty tag fallback"
-        elif [[ "$image_tag" == "latest" ]]; then
-            version=$(generate_date_based_version "latest")
-            method="latest tag conversion (FIXES FAILURE_BLACKDUCK_FEATURE_ERROR)"
-        elif is_semantic_version "$image_tag"; then
-            version="${image_tag#v}"  # Remove 'v' prefix if present
-            method="semantic version extraction"
-        elif is_date_format "$image_tag"; then
-            # Convert YYYYMMDD to YYYY.MM.DD
-            version="$(echo "$image_tag" | sed 's/\([0-9][0-9][0-9][0-9]\)\([0-9][0-9]\)\([0-9][0-9]\)/\1.\2.\3/')"
-            method="date format conversion"
-        elif is_build_number "$image_tag"; then
-            version="build-$image_tag"
-            method="build ID conversion"
-        elif is_ci_build_number "$image_tag"; then
-            version="$image_tag"
-            method="CI build number"
-        elif is_branch_name "$image_tag"; then
-            version=$(generate_date_based_version "$image_tag")
-            method="branch tag conversion"
-        elif is_prerelease_tag "$image_tag"; then
-            version=$(generate_date_based_version "$image_tag")
-            method="pre-release tag conversion"
-        elif [[ "$image_tag" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]$ ]] && [[ ${#image_tag} -le 50 ]]; then
-            # Generic valid tag
-            local clean_tag=$(sanitize_version "$image_tag")
-            version=$(generate_date_based_version "$clean_tag")
-            method="generic tag conversion"
+        log_info "Loading configuration for application: $app_name"
+        
+        # Validate YAML syntax
+        if ! yq e '.' "$CONFIG_FILE" >/dev/null 2>&1; then
+            log_error "Configuration file contains invalid YAML syntax"
+            return 1
+        fi
+        
+        # Check if application exists in configuration
+        if ! yq e ".applications[] | select(.name == \"$app_name\")" "$CONFIG_FILE" >/dev/null 2>&1; then
+            log_error "Application '$app_name' not found in configuration"
+            log_info "Available applications:"
+            local available_apps
+            if available_apps=$(yq e '.applications[].name' "$CONFIG_FILE" 2>/dev/null); then
+                echo "$available_apps" | sed 's/^/  - /' >&2
+            else
+                log_info "  (Cannot read configuration - check YAML syntax)"
+            fi
+            return 1
+        fi
+        
+        # Read configuration values with error handling
+        export TARGET_NS=$(yq e ".applications[] | select(.name == \"$app_name\") | .namespace" "$CONFIG_FILE" 2>/dev/null)
+        export LABEL_SELECTOR=$(yq e ".applications[] | select(.name == \"$app_name\") | .labelSelector" "$CONFIG_FILE" 2>/dev/null) 
+        export DESIRED_PROJECT_GROUP=$(yq e ".applications[] | select(.name == \"$app_name\") | .projectGroup" "$CONFIG_FILE" 2>/dev/null)
+        export PROJECT_TIER=$(yq e ".applications[] | select(.name == \"$app_name\") | .projectTier // 3" "$CONFIG_FILE" 2>/dev/null)
+        export PROJECT_PHASE=$(yq e ".applications[] | select(.name == \"$app_name\") | .projectPhase // \"DEVELOPMENT\"" "$CONFIG_FILE" 2>/dev/null)
+        
+        # ENHANCED: Read project version configuration with override support
+        local configured_version
+        configured_version=$(yq e ".applications[] | select(.name == \"$app_name\") | .projectVersion // \"\"" "$CONFIG_FILE" 2>/dev/null)
+        
+        # Handle project version configuration
+        if [[ -n "$configured_version" ]] && [[ "$configured_version" != "null" ]] && [[ "$configured_version" != '""' ]]; then
+            # Explicit version override specified
+            export BD_PROJECT_VERSION_OVERRIDE="$configured_version"
+            export BD_VERSION_SOURCE="config"
+            log_info "Using explicit project version from config: $BD_PROJECT_VERSION_OVERRIDE"
         else
-            # Fallback for invalid or problematic tags
-            version=$(generate_fallback_version)
-            method="fallback generation for invalid tag"
+            # No explicit version - enable auto-detection
+            export BD_PROJECT_VERSION_OVERRIDE=""
+            export BD_VERSION_SOURCE="auto"
+            log_info "No explicit project version configured - will auto-detect from container image tags"
         fi
         
-        # Final sanitization and validation
-        version=$(sanitize_version "$version")
-        if ! validate_version_string "$version"; then
-            version=$(generate_fallback_version)
-            method="emergency fallback after validation failure"
+        # NEW: Read per-application policy gating configuration
+        local policy_gating
+        local policy_gating_risk
+        policy_gating=$(yq e ".applications[] | select(.name == \"$app_name\") | .policyGating // false" "$CONFIG_FILE" 2>/dev/null)
+        policy_gating_risk=$(yq e ".applications[] | select(.name == \"$app_name\") | .policyGatingRisk // \"\"" "$CONFIG_FILE" 2>/dev/null)
+        
+        # Process policy gating settings
+        log_section "=== Policy Gating Configuration ==="
+        if [[ "$policy_gating" == "true" && -n "$policy_gating_risk" && "$policy_gating_risk" != "null" && "$policy_gating_risk" != '""' ]]; then
+            # Per-application policy enforcement enabled with explicit severities
+            export POLICY_FAIL_SEVERITIES="$policy_gating_risk"
+            log_info "Policy gating ENABLED for '$app_name'"
+            log_info "  Policy severities: $POLICY_FAIL_SEVERITIES"
+            log_info "  Scan will FAIL on violations of: $POLICY_FAIL_SEVERITIES"
+            log_info "  Build/deployment will be BLOCKED on policy violations"
+        elif [[ "$policy_gating" == "true" ]]; then
+            # Policy gating enabled but no severities specified - use tier defaults
+            case "$PROJECT_TIER" in
+                1) export POLICY_FAIL_SEVERITIES="BLOCKER,CRITICAL,HIGH";;
+                2) export POLICY_FAIL_SEVERITIES="BLOCKER,CRITICAL";;
+                3) export POLICY_FAIL_SEVERITIES="BLOCKER,CRITICAL";;
+                4) export POLICY_FAIL_SEVERITIES="BLOCKER";;
+                *) export POLICY_FAIL_SEVERITIES="BLOCKER,CRITICAL";;
+            esac
+            log_info "Policy gating ENABLED for '$app_name' (using Tier $PROJECT_TIER defaults)"
+            log_info "  Policy severities: $POLICY_FAIL_SEVERITIES"
+            log_warning "  Recommendation: Explicitly set policyGatingRisk in configuration"
+            log_info "  Build/deployment will be BLOCKED on policy violations"
+        else
+            # Policy gating disabled - discovery mode only
+            unset POLICY_FAIL_SEVERITIES 2>/dev/null || true
+            export POLICY_FAIL_SEVERITIES=""
+            log_info "Policy gating DISABLED for '$app_name' (discovery mode)"
+            log_info "  Scan results will be reported to Black Duck but never fail"
+            log_info "  Build/deployment will NEVER be blocked by security findings"
+            log_info "  Perfect for discovery phase or non-critical applications"
         fi
         
-        # Return version and method (caller can capture both)
-        echo "$version"
-        log_debug "Version detection: '$image_tag' -> '$version' ($method)"
-    }
-    
-    # Enhanced validation functions
-    validate_kubernetes_name() {
-        local name="$1"
-        if [[ ! "$name" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+        # Read optional description
+        local app_description
+        app_description=$(yq e ".applications[] | select(.name == \"$app_name\") | .description // \"\"" "$CONFIG_FILE" 2>/dev/null)
+        if [[ -n "$app_description" ]] && [[ "$app_description" != "null" ]]; then
+            export APPLICATION_DESCRIPTION="$app_description"
+        fi
+        
+        # Validate required fields
+        if [[ -z "$TARGET_NS" ]] || [[ "$TARGET_NS" == "null" ]]; then
+            log_error "Missing or invalid namespace for application '$app_name'"
             return 1
         fi
-        return 0
-    }
-    
-    validate_label_selector() {
-        local selector="$1"
-        # Enhanced validation for label selectors
-        if [[ -z "$selector" ]]; then
+        
+        if [[ -z "$LABEL_SELECTOR" ]] || [[ "$LABEL_SELECTOR" == "null" ]]; then
+            log_error "Missing or invalid labelSelector for application '$app_name'"
             return 1
         fi
-        # Check for basic label=value format
-        if [[ ! "$selector" =~ ^[a-zA-Z0-9._/-]+=[a-zA-Z0-9._-]+(,[a-zA-Z0-9._/-]+=[a-zA-Z0-9._-]+)*$ ]]; then
+        
+        if [[ -z "$DESIRED_PROJECT_GROUP" ]] || [[ "$DESIRED_PROJECT_GROUP" == "null" ]]; then
+            log_error "Missing or invalid projectGroup for application '$app_name'"
             return 1
         fi
-        return 0
-    }
-    
-    validate_project_phase() {
-        local phase="$1"
-        case "$phase" in
+        
+        # Validate PROJECT_PHASE against allowed values
+        case "${PROJECT_PHASE}" in
             PLANNING|DEVELOPMENT|PRERELEASE|RELEASED|DEPRECATED|ARCHIVED)
-                return 0
+                log_debug "Valid project phase: $PROJECT_PHASE"
                 ;;
             *)
+                log_warning "Invalid PROJECT_PHASE '$PROJECT_PHASE', using DEVELOPMENT as default"
+                export PROJECT_PHASE="DEVELOPMENT"
+                ;;
+        esac
+        
+        # Validate PROJECT_TIER
+        if [[ ! "$PROJECT_TIER" =~ ^[1-4]$ ]]; then
+            log_warning "Invalid PROJECT_TIER '$PROJECT_TIER', using 3 as default"
+            export PROJECT_TIER="3"
+        fi
+        
+        # Validate policy gating risk severities if specified
+        if [[ -n "${POLICY_FAIL_SEVERITIES:-}" ]]; then
+            local valid_severities="BLOCKER CRITICAL HIGH MEDIUM LOW TRIVIAL UNSPECIFIED ALL NONE"
+            IFS=',' read -ra severity_array <<< "$POLICY_FAIL_SEVERITIES"
+            for severity in "${severity_array[@]}"; do
+                severity=$(echo "$severity" | tr '[:lower:]' '[:upper:]' | xargs) # Normalize and trim
+                if [[ ! " $valid_severities " =~ " $severity " ]]; then
+                    log_warning "Invalid policy severity '$severity' - will be ignored"
+                fi
+            done
+        fi
+        
+        log_success "Configuration loaded successfully"
+        log_section "=== Application Configuration Summary ==="
+        log_info "  Application: $app_name"
+        log_info "  Namespace: $TARGET_NS"
+        log_info "  Label Selector: $LABEL_SELECTOR" 
+        log_info "  Project Group: $DESIRED_PROJECT_GROUP"
+        log_info "  Project Tier: $PROJECT_TIER"
+        log_info "  Project Phase: $PROJECT_PHASE"
+        log_info "  Version Strategy: $BD_VERSION_SOURCE"
+        if [[ "$BD_VERSION_SOURCE" == "config" ]]; then
+            log_info "  Explicit Version: $BD_PROJECT_VERSION_OVERRIDE"
+        else
+            log_info "  Version Detection: Auto-detect from image tags"
+        fi
+        if [[ -n "${POLICY_FAIL_SEVERITIES:-}" ]]; then
+            log_info "  Policy Enforcement: ENABLED ($POLICY_FAIL_SEVERITIES)"
+        else
+            log_info "  Policy Enforcement: DISABLED (discovery mode)"
+        fi
+        if [[ -n "${APPLICATION_DESCRIPTION:-}" ]]; then
+            log_info "  Description: $APPLICATION_DESCRIPTION"
+        fi
+        
+        # Debug output
+        if [[ "$DEBUG_ENABLED" == "true" ]]; then
+            log_debug "Application data: $(yq e ".applications[] | select(.name == \"$app_name\")" "$CONFIG_FILE" 2>/dev/null)"
+        fi
+        
+        return 0
+    }
+
+    # ENHANCED: Function to execute the container scan with policy gating support
+    execute_scan() {
+        local app_name="${1:-unknown}"
+        
+        log_section "=== Starting Container Scan ==="
+        log_info "Application: $app_name"
+        log_info "Namespace: $TARGET_NS"
+        log_info "Label Selector: $LABEL_SELECTOR"
+        log_info "Project Group: $DESIRED_PROJECT_GROUP"
+        if [[ -n "${POLICY_FAIL_SEVERITIES:-}" ]]; then
+            log_info "Policy Enforcement: ENABLED (fail on: $POLICY_FAIL_SEVERITIES)"
+        else
+            log_info "Policy Enforcement: DISABLED (discovery mode)"
+        fi
+
+        # Find the core scanner script
+        local scanner_script="/scripts/bdsc-container-scan.sh"
+        if [[ ! -f "$scanner_script" ]]; then
+            # Try alternative locations
+            if [[ -f "$SCRIPT_DIR/bdsc-container-scan.sh" ]]; then
+                scanner_script="$SCRIPT_DIR/bdsc-container-scan.sh"
+            else
+                log_error "Core scanner script not found: bdsc-container-scan.sh"
+                log_info "Expected locations:"
+                log_info "  - /scripts/bdsc-container-scan.sh"
+                log_info "  - $SCRIPT_DIR/bdsc-container-scan.sh"
+                return 1
+            fi
+        fi
+
+        # Ensure scanner script is executable
+        if [[ ! -x "$scanner_script" ]]; then
+            log_info "Making scanner script executable..."
+            chmod +x "$scanner_script" || {
+                log_error "Failed to make scanner script executable"
+                return 1
+            }
+        fi
+
+        # Set up environment for the scanner (including policy gating settings)
+        export BD_URL="${BD_URL:-}"
+        export BD_TOKEN="${BD_TOKEN:-}"
+        export TRUST_CERT="${TRUST_CERT:-true}"
+        export DEBUG_ENABLED="${DEBUG_ENABLED:-false}"
+        
+        # CRITICAL: Export the application name for proper project naming
+        export APPLICATION_NAME="$app_name"
+        
+        # NEW: Policy gating environment variable is already set by read_application_config
+        # POLICY_FAIL_SEVERITIES is exported with per-application settings
+
+        # Validate required environment variables
+        if [[ -z "$BD_URL" ]] || [[ -z "$BD_TOKEN" ]]; then
+            log_error "Black Duck credentials not configured"
+            log_info "Required environment variables:"
+            log_info "  BD_URL    - Black Duck server URL"
+            log_info "  BD_TOKEN  - Black Duck API token"
+            log_info "Please set these environment variables or check your secrets configuration"
+            return 1
+        fi
+
+        log_info "Executing container scan with enhanced policy controls..."
+        log_debug "Scanner script: $scanner_script"
+        log_debug "Policy enforcement: ${POLICY_FAIL_SEVERITIES:-'DISABLED (discovery mode)'}"
+
+        # Execute the scanner with proper error handling
+        local start_time end_time duration exit_code=0
+        start_time=$(date +%s)
+
+        if "$scanner_script"; then
+            end_time=$(date +%s)
+            duration=$((end_time - start_time))
+            
+            # Enhanced success logging with policy context
+            if [[ -n "${POLICY_FAIL_SEVERITIES:-}" ]]; then
+                log_success "Container scan completed successfully (${duration}s) - Policy enforcement PASSED"
+                log_info "No policy violations found at severity levels: $POLICY_FAIL_SEVERITIES"
+            else
+                log_success "Container scan completed successfully (${duration}s) - Discovery mode"
+                log_info "Scan results reported to Black Duck for visibility"
+            fi
+            return 0
+        else
+            exit_code=$?
+            end_time=$(date +%s)
+            duration=$((end_time - start_time))
+            
+            # Enhanced error handling with policy context
+            if [[ -n "${POLICY_FAIL_SEVERITIES:-}" ]]; then
+                log_error "Container scan failed (${duration}s, exit code: $exit_code) - Policy enforcement FAILED"
+                log_error "Policy violations found at severity levels: $POLICY_FAIL_SEVERITIES"
+                log_info "To disable policy enforcement for this application:"
+                log_info "  Set policyGating: false in applications.yaml for '$app_name'"
+                log_info "To make policy enforcement more lenient:"
+                log_info "  Adjust policyGatingRisk (e.g., 'BLOCKER' only) in applications.yaml"
+            else
+                log_error "Container scan failed (${duration}s, exit code: $exit_code) - Technical failure in discovery mode"
+            fi
+            
+            # Provide troubleshooting guidance based on exit code
+            case $exit_code in
+                11)
+                    log_error "FAILURE_BLACKDUCK_FEATURE_ERROR - Black Duck feature licensing issue"
+                    log_info "Troubleshooting steps:"
+                    log_info "  1. Verify Black Duck licensing (CONTAINER_ANALYSIS, BDSC)"
+                    log_info "  2. Check if project version is valid (not 'latest' or empty)"
+                    log_info "  3. Verify Black Duck server version compatibility"
+                    ;;
+                9)
+                    log_error "FAILURE_POLICY_VIOLATION - Security policy violations detected"
+                    if [[ -n "${POLICY_FAIL_SEVERITIES:-}" ]]; then
+                        log_info "Policy enforcement is ENABLED for severity levels: $POLICY_FAIL_SEVERITIES"
+                        log_info "Options to resolve:"
+                        log_info "  1. Fix the security vulnerabilities in your application"
+                        log_info "  2. Set policyGating: false to switch to discovery mode"
+                        log_info "  3. Adjust policyGatingRisk to be more lenient (e.g., 'BLOCKER' only)"
+                        log_info "  4. Create security exceptions in Black Duck for accepted risks"
+                    else
+                        log_info "Unexpected policy failure in discovery mode - check configuration"
+                    fi
+                    ;;
+                1|2|3)
+                    log_error "General scanning failure"
+                    log_info "Check scanner logs for specific error details"
+                    log_info "Enable DEBUG_ENABLED=true for detailed troubleshooting information"
+                    ;;
+                *)
+                    log_error "Unexpected exit code: $exit_code"
+                    log_info "Enable DEBUG_ENABLED=true for detailed troubleshooting information"
+                    ;;
+            esac
+            
+            return 3
+        fi
+    }
+
+    # Function to parse command line arguments
+    parse_arguments() {
+        local app_name=""
+        
+        # Handle help request
+        if [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]]; then
+            show_usage
+            exit 0
+        fi
+        
+        # Parse positional arguments
+        case $# in
+            0)
+                # No arguments - check for environment variable
+                app_name="${APP_NAME:-}"
+                if [[ -z "$app_name" ]]; then
+                    log_error "No application name provided"
+                    log_info "Usage: $SCRIPT_NAME \"Application Name\""
+                    log_info "   or: export APP_NAME=\"Application Name\" && $SCRIPT_NAME"
+                    show_usage
+                    return 1
+                fi
+                ;;
+            1)
+                # Single argument - application name
+                app_name="$1"
+                ;;
+            *)
+                log_error "Invalid number of arguments: $#"
+                log_info "Expected: 0 or 1 arguments"
+                show_usage
                 return 1
                 ;;
         esac
-    }
-    
-    validate_project_tier() {
-        local tier="$1"
-        [[ "$tier" =~ ^[1-4]$ ]]
-    }
-    
-    # Enhanced environment validation
-    check_required_env() {
-        local vars=("$@")
-        local missing=()
         
-        for var in "${vars[@]}"; do
-            if [[ -z "${!var:-}" ]]; then
-                missing+=("$var")
-            fi
-        done
-        
-        if [[ ${#missing[@]} -gt 0 ]]; then
-            log_error "Missing required environment variables: ${missing[*]}"
+        # Validate application name
+        if [[ -z "$app_name" ]]; then
+            log_error "Application name cannot be empty"
             return 1
         fi
+        
+        # Set global variables
+        export APPLICATION_NAME="$app_name"
         
         return 0
     }
-    
-    # Enhanced Kubernetes helper functions
-    wait_for_pod_ready() {
-        local namespace="$1"
-        local label_selector="$2"
-        local timeout="${3:-300}"
-        
-        log_info "Waiting for pods to be ready: namespace=$namespace, selector=$label_selector"
-        
-        if kubectl wait --for=condition=ready pod \
-           -l "$label_selector" \
-           -n "$namespace" \
-           --timeout="${timeout}s" >/dev/null 2>&1; then
-            return 0
-        else
-            return 1
-        fi
-    }
-    
-    get_pod_images() {
-        local namespace="$1"
-        local label_selector="$2"
-        
-        kubectl get pods -n "$namespace" -l "$label_selector" \
-            -o jsonpath='{range .items[*]}{.spec.containers[*].image}{"\n"}{.spec.initContainers[*].image}{"\n"}{end}' 2>/dev/null | \
-            grep -v '^$' | sort -u
-    }
-    
-    count_matching_pods() {
-        local namespace="$1"
-        local selector="$2"
-        kubectl get pods -n "$namespace" -l "$selector" --no-headers 2>/dev/null | wc -l
-    }
-    
-    check_namespace_access() {
-        local namespace="$1"
-        kubectl auth can-i get pods -n "$namespace" >/dev/null 2>&1
-    }
-    
-    # Enhanced image validation
-    validate_image_format() {
-        local image="$1"
-        
-        # Enhanced image format validation (registry/namespace/name:tag or @digest)
-        if [[ "$image" =~ ^[a-zA-Z0-9._/-]+:[a-zA-Z0-9._-]+$ ]] || \
-           [[ "$image" =~ ^[a-zA-Z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]; then
-            return 0
-        else
-            return 1
-        fi
-    }
-    
-    extract_image_tag() {
-        local image="$1"
-        if [[ "$image" == *"@sha256:"* ]]; then
-            echo "sha256-${image##*@sha256:}"
-        elif [[ "$image" == *":"* ]]; then
-            echo "${image##*:}"
-        else
-            echo "latest"
-        fi
-    }
-    
-    # Enhanced Black Duck helper functions
-    test_blackduck_connectivity() {
-        local bd_url="$1"
-        local bd_token="$2"
-        local trust_cert="${3:-true}"
-        
-        local curl_args=("-s" "--connect-timeout" "10" "--max-time" "30")
-        
-        if [[ "$trust_cert" == "true" ]]; then
-            curl_args+=("--insecure")
-        fi
-        
-        local health_url="$bd_url/api/current-version"
-        
-        if curl "${curl_args[@]}" -H "Authorization: token $bd_token" "$health_url" >/dev/null 2>&1; then
-            return 0
-        else
-            return 1
-        fi
-    }
-    
-    get_blackduck_bearer_token() {
-        local bd_url="$1"
-        local api_token="$2"
-        local trust_cert="${3:-true}"
-        
-        local curl_args=("-s" "--connect-timeout" "30" "--max-time" "60")
-        if [[ "$trust_cert" == "true" ]]; then
-            curl_args+=("--insecure")
-        fi
-        
-        local auth_url="$bd_url/api/tokens/authenticate"
-        local response
-        
-        if response=$(curl "${curl_args[@]}" \
-                          -X POST \
-                          -H "Authorization: token $api_token" \
-                          -H "Accept: application/vnd.blackducksoftware.user-4+json" \
-                          "$auth_url" 2>/dev/null); then
-            
-            if command -v jq >/dev/null 2>&1; then
-                echo "$response" | jq -r '.bearerToken // empty'
-            else
-                echo "$response" | grep -o '"bearerToken":"[^"]*"' | cut -d'"' -f4
-            fi
-        fi
-    }
-    
-    # Enhanced error handling with scan-specific guidance
-    handle_scan_failure() {
-        local exit_code="$1"
-        local image="${2:-unknown}"
-        
-        case $exit_code in
-            11)
-                log_error "FAILURE_BLACKDUCK_FEATURE_ERROR for $image"
-                log_error "This typically indicates licensing or project version issues"
-                log_info "Common causes:"
-                log_info "  1. Black Duck CONTAINER_ANALYSIS license not available or expired"
-                log_info "  2. Invalid project version (e.g., 'latest' tag) - NOW FIXED with version detection"
-                log_info "  3. Black Duck server version compatibility issues"
-                log_info "  4. Project version already exists with different phase"
-                ;;
-            1|2)
-                log_error "General scanning failure for $image"
-                log_info "Check scanner logs for specific error details"
-                ;;
-            124)
-                log_error "Scan timeout for $image"
-                log_info "Consider increasing SCAN_TIMEOUT or checking image size"
-                ;;
-            *)
-                log_error "Unknown scan failure for $image (exit code: $exit_code)"
-                ;;
-        esac
-    }
-    
-    # Enhanced cleanup functions
-    cleanup_temp_files() {
-        local temp_dir="${1:-/tmp/bd-selfscan}"
-        
-        if [[ "${KEEP_TEMP_FILES:-false}" == "true" ]]; then
-            log_info "Keeping temporary files for debugging: $temp_dir"
-            return 0
-        fi
-        
-        if [[ -d "$temp_dir" ]]; then
-            log_debug "Cleaning up temporary files: $temp_dir"
-            rm -rf "$temp_dir" 2>/dev/null || true
-        fi
-    }
-    
-    # Enhanced signal handlers
-    setup_signal_handlers() {
-        trap 'log_warning "Script interrupted by signal"; cleanup_temp_files; exit 130' INT TERM
-        trap 'log_error "Unexpected error at line $LINENO"; cleanup_temp_files; exit 1' ERR
-    }
-    
-    # Resource monitoring
-    check_disk_space() {
-        local path="${1:-/tmp}"
-        local required_gb="${2:-10}"
-        
-        local available_kb
-        available_kb=$(df "$path" | awk 'NR==2 {print $4}')
-        local available_gb=$((available_kb / 1024 / 1024))
-        
-        if [[ $available_gb -lt $required_gb ]]; then
-            log_warning "Low disk space: ${available_gb}GB available, ${required_gb}GB required"
-            return 1
-        fi
-        
-        return 0
-    }
-    
-    check_memory_usage() {
-        local threshold_percent="${1:-80}"
-        
-        local mem_used_percent
-        mem_used_percent=$(free | awk 'NR==2{printf "%.0f", $3*100/$2 }')
-        
-        if [[ $mem_used_percent -gt $threshold_percent ]]; then
-            log_warning "High memory usage: ${mem_used_percent}% used"
-            return 1
-        fi
-        
-        return 0
-    }
-    
-    # Enhanced timeout function
-    run_with_timeout() {
-        local timeout_seconds="$1"
-        shift
-        
-        timeout "$timeout_seconds" "$@"
+
+    # Cleanup function
+    cleanup() {
         local exit_code=$?
         
-        case $exit_code in
-            0) return 0 ;;
-            124) log_error "Command timed out after ${timeout_seconds}s"; return 124 ;;
-            *) log_error "Command failed with exit code $exit_code"; return $exit_code ;;
-        esac
+        # Clear sensitive environment variables
+        unset BD_TOKEN 2>/dev/null || true
+        
+        if [[ $exit_code -eq 0 ]]; then
+            log_success "Scan application completed successfully"
+        elif [[ $exit_code -eq 9 ]]; then
+            log_warning "Scan application completed with policy violations (exit code: $exit_code)"
+        else
+            log_warning "Scan application exited with code $exit_code"
+        fi
+        
+        exit $exit_code
     }
-    
-    # Project name and version utilities for Black Duck
-    sanitize_project_name() {
-        local name="$1"
-        # Replace invalid characters and ensure valid format for Black Duck
-        echo "$name" | sed 's/[^a-zA-Z0-9 ._()-]//g' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//'
-    }
-    
-    # Version detection testing utility
-    test_version_detection() {
-        log_info "Testing version detection with common image tag patterns..."
+
+    # Set trap for cleanup
+    trap cleanup EXIT INT TERM
+
+    # Main function
+    main() {
+        log_section "=== BD SelfScan - Single Application Scanner v${SCRIPT_VERSION} ==="
+        log_info "Enhanced with per-application policy gating control"
         
-        local test_cases=(
-            "webgoat/webgoat:latest"
-            "nginx:1.21.6"
-            "myapp:v2.1.3"
-            "service:20250912"
-            "api:build-123456"
-            "app:main"
-            "tool:v1.0.0-rc1"
-            "postgres:13"
-            "redis:7.0.5-alpine"
-        )
-        
-        for image in "${test_cases[@]}"; do
-            local tag=$(extract_image_tag "$image")
-            local version=$(detect_version_from_tag "$tag")
-            printf "%-25s -> %-25s\n" "$image" "$version"
-        done
-    }
-    
-    # Configuration validation helpers
-    validate_application_config() {
-        local app_name="$1"
-        local namespace="$2"
-        local label_selector="$3"
-        local project_group="$4"
-        local project_phase="${5:-DEVELOPMENT}"
-        local project_tier="${6:-3}"
-        
-        local errors=()
-        
-        [[ -z "$app_name" ]] && errors+=("application name is required")
-        [[ -z "$namespace" ]] && errors+=("namespace is required")
-        [[ -z "$label_selector" ]] && errors+=("labelSelector is required")
-        [[ -z "$project_group" ]] && errors+=("projectGroup is required")
-        
-        validate_label_selector "$label_selector" || errors+=("invalid labelSelector format")
-        validate_project_phase "$project_phase" || errors+=("invalid projectPhase: $project_phase")
-        validate_project_tier "$project_tier" || errors+=("invalid projectTier: $project_tier")
-        
-        if [[ ${#errors[@]} -gt 0 ]]; then
-            log_error "Configuration validation failed for '$app_name':"
-            printf '  - %s\n' "${errors[@]}" >&2
+        # Parse command line arguments
+        if ! parse_arguments "$@"; then
             return 1
         fi
         
+        log_info "Target application: $APPLICATION_NAME"
+        log_debug "Debug mode enabled"
+        
+        # Read application configuration - now includes policy gating
+        if ! read_application_config "$APPLICATION_NAME"; then
+            return 1
+        fi
+        
+        # Execute the container scan with policy gating support
+        if ! execute_scan "$APPLICATION_NAME"; then
+            return 3
+        fi
+        
+        log_success "Single application scan completed successfully"
         return 0
     }
-    
-    # Enhanced initialization
-    log_debug "Enhanced common functions loaded (version: $COMMON_FUNCTIONS_VERSION)"
-    log_debug "Features: $ENHANCED_FEATURES"
+
+    # Script entry point
+    if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+        main "$@"
+    fi
+  
+  # ENHANCED: Bulk application scanner with version reporting and policy gating support (v2.1.0)
+  # Features: Shows version strategy and policy enforcement for each application, enhanced parallel scanning
+  scan-all-applications.sh: |
+    {{- .Files.Get "scripts/scan-all-applications.sh" | nindent 4 }}
+  
+  # ENHANCED: Common utility functions with version detection and policy support (v2.1.0)
+  common-functions.sh: |
+    {{- .Files.Get "scripts/common-functions.sh" | nindent 4 }}
 
   # ENHANCED: Health check script with version detection testing
   health-check.sh: |
-    #!/bin/bash
-    # BD SelfScan Enhanced Health Check Script v2.0.0
-    # Features: Version detection testing, enhanced connectivity checks, configuration validation
-    set -euo pipefail
-    
-    # Source enhanced common functions
-    source /scripts/common-functions.sh 2>/dev/null || {
-        echo "[ERROR] Cannot load common functions - basic health check mode"
-        BASIC_MODE=true
-    }
-    
-    if [[ "${BASIC_MODE:-false}" != "true" ]]; then
-        log_section "=== BD SelfScan Enhanced Health Check v2.0.0 ==="
-        log_info "Features: $ENHANCED_FEATURES"
-    else
-        echo "=== BD SelfScan Basic Health Check ==="
-    fi
-    
-    # Check environment variables
-    echo "Checking environment variables..."
-    REQUIRED_VARS=(BD_URL BD_TOKEN)
-    MISSING_VARS=()
-    
-    for var in "${REQUIRED_VARS[@]}"; do
-        if [[ -z "${!var:-}" ]]; then
-            MISSING_VARS+=("$var")
-        fi
-    done
-    
-    if [[ ${#MISSING_VARS[@]} -eq 0 ]]; then
-        echo "✓ Required environment variables are set"
-    else
-        echo "✗ Missing required environment variables: ${MISSING_VARS[*]}"
-        exit 1
-    fi
-    
-    # Check required tools
-    echo "Checking required tools..."
-    TOOLS=(java kubectl yq jq skopeo curl)
-    MISSING_TOOLS=()
-    
-    for tool in "${TOOLS[@]}"; do
-        if ! command -v "$tool" >/dev/null 2>&1; then
-            MISSING_TOOLS+=("$tool")
-        fi
-    done
-    
-    if [[ ${#MISSING_TOOLS[@]} -eq 0 ]]; then
-        echo "✓ All required tools are available"
-        # Show versions for debugging
-        echo "Tool versions:"
-        echo "  Java: $(java -version 2>&1 | head -1 | cut -d'"' -f2)"
-        echo "  kubectl: $(kubectl version --client --short 2>/dev/null | cut -d' ' -f3)"
-        echo "  yq: $(yq --version | cut -d' ' -f4 2>/dev/null || echo 'unknown')"
-        echo "  jq: $(jq --version 2>/dev/null || echo 'unknown')"
-    else
-        echo "✗ Missing tools: ${MISSING_TOOLS[*]}"
-        exit 1
-    fi
-    
-    # Enhanced Black Duck connectivity test
-    echo "Testing Black Duck connectivity..."
-    if [[ "${BASIC_MODE:-false}" != "true" ]]; then
-        if test_blackduck_connectivity "$BD_URL" "$BD_TOKEN" "${TRUST_CERT:-true}"; then
-            log_success "Black Duck server is reachable"
-            
-            # Test bearer token acquisition
-            if bearer_token=$(get_blackduck_bearer_token "$BD_URL" "$BD_TOKEN" "${TRUST_CERT:-true}"); then
-                if [[ -n "$bearer_token" ]]; then
-                    log_success "Bearer token acquired successfully"
-                else
-                    log_warning "Bearer token acquisition returned empty result"
-                fi
-            else
-                log_warning "Bearer token acquisition failed"
-            fi
-        else
-            log_error "Cannot reach Black Duck server at: $BD_URL"
-            exit 1
-        fi
-    else
-        # Basic connectivity test
-        if curl -k -s --connect-timeout 10 -I "$BD_URL" >/dev/null 2>&1; then
-            echo "✓ Black Duck server is reachable"
-        else
-            echo "✗ Cannot reach Black Duck server"
-            exit 1
-        fi
-    fi
-    
-    # Enhanced configuration validation
-    echo "Checking configuration..."
-    if [[ -f "/config/applications.yaml" ]]; then
-        if yq eval '.' /config/applications.yaml >/dev/null 2>&1; then
-            APP_COUNT=$(yq eval '.applications | length' /config/applications.yaml 2>/dev/null || echo "0")
-            echo "✓ Configuration valid: $APP_COUNT applications configured"
-            
-            # Enhanced: Show version strategies for each application
-            if [[ "${BASIC_MODE:-false}" != "true" ]] && [[ $APP_COUNT -gt 0 ]]; then
-                echo "Version strategies configured:"
-                for i in $(seq 0 $((APP_COUNT - 1))); do
-                    APP_NAME=$(yq eval ".applications[$i].name" /config/applications.yaml)
-                    PROJECT_VERSION=$(yq eval ".applications[$i].projectVersion // \"\"" /config/applications.yaml)
-                    
-                    if [[ -n "$PROJECT_VERSION" ]] && [[ "$PROJECT_VERSION" != "null" ]] && [[ "$PROJECT_VERSION" != '""' ]]; then
-                        echo "  - $APP_NAME: Explicit version '$PROJECT_VERSION'"
-                    else
-                        echo "  - $APP_NAME: Auto-detection enabled"
-                    fi
-                done
-            fi
-        else
-            echo "✗ Invalid YAML syntax in configuration"
-            exit 1
-        fi
-    else
-        echo "✗ Configuration file not found: /config/applications.yaml"
-        exit 1
-    fi
-    
-    # Resource checks
-    echo "Checking system resources..."
-    
-    # Disk space check
-    if [[ "${BASIC_MODE:-false}" != "true" ]]; then
-        if check_disk_space "/tmp" 5; then
-            log_success "Sufficient disk space available"
-        else
-            log_warning "Low disk space - scans may fail"
-        fi
-        
-        if check_memory_usage 90; then
-            log_success "Memory usage is acceptable"
-        else
-            log_warning "High memory usage detected"
-        fi
-    else
-        # Basic disk check
-        DISK_AVAIL=$(df /tmp | awk 'NR==2 {print int($4/1024/1024)}')
-        if [[ $DISK_AVAIL -gt 5 ]]; then
-            echo "✓ Sufficient disk space: ${DISK_AVAIL}GB available"
-        else
-            echo "⚠ Low disk space: ${DISK_AVAIL}GB available"
-        fi
-    fi
-    
-    # Enhanced: Version detection testing
-    if [[ "${BASIC_MODE:-false}" != "true" ]]; then
-        echo ""
-        echo "Testing enhanced version detection..."
-        test_version_detection
-    fi
-    
-    # Final status
-    if [[ "${BASIC_MODE:-false}" != "true" ]]; then
-        log_success "Enhanced health check completed successfully"
-        log_info "Key improvements in v2.0:"
-        log_info "  ✓ Intelligent version detection (fixes FAILURE_BLACKDUCK_FEATURE_ERROR)"
-        log_info "  ✓ Explicit version override support via projectVersion config"
-        log_info "  ✓ Enhanced error handling and debugging capabilities"
-        log_info "  ✓ Robust 'latest' tag conversion (latest -> YYYY.MM.DD-latest)"
-    else
-        echo "✓ Basic health check completed successfully"
-    fi
+    {{- .Files.Get "scripts/health-check.sh" | nindent 4 }}
 
   # ENHANCED: Container image discovery script with version preview
   discover-images.sh: |
-    #!/bin/bash
-    # Enhanced Container Image Discovery Script v2.0.0
-    # Features: Version detection preview, image validation, enhanced reporting
-    set -euo pipefail
-    
-    source /scripts/common-functions.sh 2>/dev/null || {
-        echo "[ERROR] Cannot load common functions"
-        exit 1
-    }
-    
-    NAMESPACE="${1:-}"
-    LABEL_SELECTOR="${2:-}"
-    SHOW_VERSIONS="${3:-true}"
-    
-    if [[ -z "$NAMESPACE" ]] || [[ -z "$LABEL_SELECTOR" ]]; then
-        log_error "Usage: $0 <namespace> <label-selector> [show-versions]"
-        log_info "Examples:"
-        log_info "  $0 default app=webgoat-official"
-        log_info "  $0 production tier=web true"
-        exit 1
-    fi
-    
-    log_section "=== Enhanced Container Image Discovery v2.0.0 ==="
-    log_info "Discovering images in namespace: $NAMESPACE"
-    log_info "Label selector: $LABEL_SELECTOR"
-    log_info "Version preview: $SHOW_VERSIONS"
-    
-    # Validate namespace access
-    if ! check_namespace_access "$NAMESPACE"; then
-        log_error "Cannot access namespace '$NAMESPACE'"
-        log_info "Check permissions: kubectl auth can-i get pods -n $NAMESPACE"
-        exit 1
-    fi
-    
-    # Validate label selector format
-    if ! validate_label_selector "$LABEL_SELECTOR"; then
-        log_warning "Label selector format may be invalid: $LABEL_SELECTOR"
-    fi
-    
-    # Count matching pods
-    POD_COUNT=$(count_matching_pods "$NAMESPACE" "$LABEL_SELECTOR")
-    log_info "Found $POD_COUNT pods matching criteria"
-    
-    if [[ $POD_COUNT -eq 0 ]]; then
-        log_warning "No pods found - checking if any pods exist in namespace"
-        TOTAL_PODS=$(kubectl get pods -n "$NAMESPACE" --no-headers 2>/dev/null | wc -l)
-        log_info "Total pods in namespace '$NAMESPACE': $TOTAL_PODS"
-        
-        if [[ $TOTAL_PODS -gt 0 ]]; then
-            log_info "Available labels in namespace:"
-            kubectl get pods -n "$NAMESPACE" --show-labels 2>/dev/null | head -5 | while read -r line; do
-                log_info "  $line"
-            done
-        fi
-        exit 1
-    fi
-    
-    # Get container images
-    if IMAGES=$(get_pod_images "$NAMESPACE" "$LABEL_SELECTOR"); then
-        if [[ -n "$IMAGES" ]]; then
-            log_success "Found container images:"
-            
-            IMAGE_COUNT=0
-            while IFS= read -r image; do
-                if [[ -n "$image" ]]; then
-                    ((IMAGE_COUNT++))
-                    
-                    if validate_image_format "$image"; then
-                        echo "  ✓ $image"
-                        
-                        if [[ "$SHOW_VERSIONS" == "true" ]]; then
-                            # Show version detection preview
-                            TAG=$(extract_image_tag "$image")
-                            VERSION=$(detect_version_from_tag "$TAG")
-                            echo "    └── Black Duck Version: $VERSION"
-                        fi
-                    else
-                        echo "  ⚠ $image (invalid format)"
-                    fi
-                fi
-            done <<< "$IMAGES"
-            
-            log_success "Discovery completed: $IMAGE_COUNT unique container images"
-            
-            if [[ "$SHOW_VERSIONS" == "true" ]]; then
-                log_info "Version detection shows how image tags will be converted for Black Duck"
-                log_info "Key benefit: 'latest' tags are converted to 'YYYY.MM.DD-latest' format"
-                log_info "This prevents FAILURE_BLACKDUCK_FEATURE_ERROR in scanning"
-            fi
-            
-        else
-            log_warning "No container images found in matching pods"
-            exit 1
-        fi
-    else
-        log_error "Failed to discover images"
-        exit 1
-    fi
+    {{- .Files.Get "scripts/discover-images.sh" | nindent 4 }}
 
   # ENHANCED: Configuration testing and validation script
   test-config.sh: |
+    {{- .Files.Get "scripts/test-config.sh" | nindent 4 }}
+
+  # NEW: Policy gating testing script
+  test-policy-gating.sh: |
     #!/bin/bash
-    # Enhanced Configuration Testing Script v2.0.0
-    # Features: projectVersion validation, version strategy testing, comprehensive checks
+    # BD SelfScan Policy Gating Testing Script v1.0.0
+    # Purpose: Test per-application policy gating configuration and behavior
     set -euo pipefail
     
+    # Source common functions
     source /scripts/common-functions.sh 2>/dev/null || {
         echo "[ERROR] Cannot load common functions"
         exit 1
     }
     
     CONFIG_FILE="${1:-/config/applications.yaml}"
+    TEST_MODE="${2:-preview}"  # preview, dry-run, or live
     
-    log_section "=== Enhanced Configuration Testing v2.0.0 ==="
-    log_info "Testing configuration file: $CONFIG_FILE"
+    log_section "=== BD SelfScan Policy Gating Testing v1.0.0 ==="
+    log_info "Configuration file: $CONFIG_FILE"
+    log_info "Test mode: $TEST_MODE"
     
     if [[ ! -f "$CONFIG_FILE" ]]; then
         log_error "Configuration file not found: $CONFIG_FILE"
         exit 1
     fi
     
-    # YAML syntax validation
-    log_info "Validating YAML syntax..."
-    if ! yq eval '.' "$CONFIG_FILE" >/dev/null 2>&1; then
-        log_error "Invalid YAML syntax"
-        exit 1
-    fi
-    log_success "YAML syntax is valid"
-    
     # Get application count
     APP_COUNT=$(yq eval '.applications | length' "$CONFIG_FILE" 2>/dev/null || echo "0")
-    log_info "Found $APP_COUNT applications to validate"
+    log_info "Found $APP_COUNT applications to test"
     
     if [[ $APP_COUNT -eq 0 ]]; then
         log_error "No applications defined in configuration"
         exit 1
     fi
     
-    # Enhanced validation for each application
-    VALIDATION_ERRORS=0
+    # Test each application's policy configuration
+    ENFORCEMENT_APPS=()
+    DISCOVERY_APPS=()
+    POLICY_ERRORS=0
     
     for i in $(seq 0 $((APP_COUNT - 1))); do
         APP_NAME=$(yq eval ".applications[$i].name" "$CONFIG_FILE")
         NAMESPACE=$(yq eval ".applications[$i].namespace" "$CONFIG_FILE")
-        LABEL_SELECTOR=$(yq eval ".applications[$i].labelSelector" "$CONFIG_FILE")
-        PROJECT_GROUP=$(yq eval ".applications[$i].projectGroup" "$CONFIG_FILE")
-        PROJECT_PHASE=$(yq eval ".applications[$i].projectPhase // \"DEVELOPMENT\"" "$CONFIG_FILE")
+        POLICY_GATING=$(yq eval ".applications[$i].policyGating // false" "$CONFIG_FILE")
+        POLICY_GATING_RISK=$(yq eval ".applications[$i].policyGatingRisk // \"\"" "$CONFIG_FILE")
         PROJECT_TIER=$(yq eval ".applications[$i].projectTier // 3" "$CONFIG_FILE")
-        PROJECT_VERSION=$(yq eval ".applications[$i].projectVersion // \"\"" "$CONFIG_FILE")
         
-        log_section "Validating application: $APP_NAME"
+        log_section "Testing Policy Configuration: $APP_NAME"
         
-        # Use enhanced validation function
-        if validate_application_config "$APP_NAME" "$NAMESPACE" "$LABEL_SELECTOR" "$PROJECT_GROUP" "$PROJECT_PHASE" "$PROJECT_TIER"; then
-            log_success "Basic configuration validation passed"
-        else
-            ((VALIDATION_ERRORS++))
-            continue
-        fi
-        
-        # Enhanced: Version strategy validation and preview
-        if [[ -n "$PROJECT_VERSION" ]] && [[ "$PROJECT_VERSION" != "null" ]] && [[ "$PROJECT_VERSION" != '""' ]]; then
-            log_info "Version Strategy: Explicit override"
-            log_info "Configured Version: $PROJECT_VERSION"
+        # Policy configuration analysis
+        if [[ "$POLICY_GATING" == "true" ]]; then
+            ENFORCEMENT_APPS+=("$APP_NAME")
             
-            if validate_version_string "$PROJECT_VERSION"; then
-                log_success "Project version format is valid"
+            if [[ -n "$POLICY_GATING_RISK" && "$POLICY_GATING_RISK" != "null" && "$POLICY_GATING_RISK" != '""' ]]; then
+                log_info "✓ Policy enforcement ENABLED with explicit severities: $POLICY_GATING_RISK"
+                
+                # Validate severity values
+                VALID_SEVERITIES="BLOCKER CRITICAL HIGH MEDIUM LOW TRIVIAL UNSPECIFIED ALL NONE"
+                IFS=',' read -ra SEVERITY_ARRAY <<< "$POLICY_GATING_RISK"
+                INVALID_SEVERITIES=()
+                
+                for severity in "${SEVERITY_ARRAY[@]}"; do
+                    severity=$(echo "$severity" | xargs | tr '[:lower:]' '[:upper:]')
+                    if [[ ! " $VALID_SEVERITIES " =~ " $severity " ]]; then
+                        INVALID_SEVERITIES+=("$severity")
+                    fi
+                done
+                
+                if [[ ${#INVALID_SEVERITIES[@]} -gt 0 ]]; then
+                    log_error "Invalid policy severities: ${INVALID_SEVERITIES[*]}"
+                    ((POLICY_ERRORS++))
+                fi
+                
             else
-                log_error "Invalid project version format: $PROJECT_VERSION"
-                ((VALIDATION_ERRORS++))
+                # Using tier defaults
+                case "$PROJECT_TIER" in
+                    1) TIER_POLICY="BLOCKER,CRITICAL,HIGH";;
+                    2) TIER_POLICY="BLOCKER,CRITICAL";;
+                    3) TIER_POLICY="BLOCKER,CRITICAL";;
+                    4) TIER_POLICY="BLOCKER";;
+                    *) TIER_POLICY="BLOCKER,CRITICAL";;
+                esac
+                log_info "✓ Policy enforcement ENABLED using Tier $PROJECT_TIER defaults: $TIER_POLICY"
+                log_warning "Recommendation: Set explicit policyGatingRisk for clarity"
             fi
         else
-            log_info "Version Strategy: Auto-detection from image tags"
-            log_info "Will convert image tags using intelligent detection rules"
+            DISCOVERY_APPS+=("$APP_NAME")
+            log_info "✓ Policy enforcement DISABLED (discovery mode)"
+            
+            if [[ -n "$POLICY_GATING_RISK" && "$POLICY_GATING_RISK" != "null" && "$POLICY_GATING_RISK" != '""' ]]; then
+                log_warning "policyGatingRisk '$POLICY_GATING_RISK' will be ignored (policyGating: false)"
+            fi
         fi
         
-        # Test namespace and pod discovery
-        log_info "Testing namespace and pod discovery..."
-        
-        if kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
-            log_success "Namespace '$NAMESPACE' exists"
-            
-            if check_namespace_access "$NAMESPACE"; then
-                log_success "Namespace access granted"
-                
-                POD_COUNT=$(count_matching_pods "$NAMESPACE" "$LABEL_SELECTOR")
-                if [[ $POD_COUNT -gt 0 ]]; then
-                    log_success "Found $POD_COUNT pods matching label selector"
-                    
-                    # Enhanced: Show actual images and version detection preview
-                    if IMAGES=$(get_pod_images "$NAMESPACE" "$LABEL_SELECTOR" 2>/dev/null); then
-                        if [[ -n "$IMAGES" ]]; then
-                            log_info "Container images that would be scanned:"
-                            while IFS= read -r image; do
-                                if [[ -n "$image" ]]; then
-                                    TAG=$(extract_image_tag "$image")
-                                    
-                                    if [[ -n "$PROJECT_VERSION" ]] && [[ "$PROJECT_VERSION" != "null" ]] && [[ "$PROJECT_VERSION" != '""' ]]; then
-                                        VERSION="$PROJECT_VERSION"
-                                        SOURCE="explicit config"
-                                    else
-                                        VERSION=$(detect_version_from_tag "$TAG")
-                                        SOURCE="auto-detected"
-                                    fi
-                                    
-                                    echo "  - $image"
-                                    echo "    └── Black Duck Version: $VERSION ($SOURCE)"
-                                fi
-                            done <<< "$IMAGES"
-                        else
-                            log_warning "No container images found in pods"
-                        fi
-                    else
-                        log_warning "Could not extract container images"
-                    fi
+        # Test namespace access if not in preview mode
+        if [[ "$TEST_MODE" != "preview" ]]; then
+            if kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
+                if check_namespace_access "$NAMESPACE"; then
+                    log_success "Namespace '$NAMESPACE' accessible"
                 else
-                    log_warning "No pods found matching label selector '$LABEL_SELECTOR'"
-                    log_info "This is not necessarily an error - pods may not be running yet"
+                    log_error "Cannot access namespace '$NAMESPACE'"
+                    ((POLICY_ERRORS++))
                 fi
             else
-                log_error "Insufficient permissions to access namespace '$NAMESPACE'"
-                ((VALIDATION_ERRORS++))
+                log_error "Namespace '$NAMESPACE' does not exist"
+                ((POLICY_ERRORS++))
             fi
-        else
-            log_error "Namespace '$NAMESPACE' does not exist"
-            ((VALIDATION_ERRORS++))
         fi
-        
-        echo ""
     done
     
-    # Final summary
-    log_section "=== Configuration Testing Summary ==="
-    log_info "Applications tested: $APP_COUNT"
-    log_info "Validation errors: $VALIDATION_ERRORS"
+    # Summary and recommendations
+    log_section "=== Policy Gating Test Results ==="
+    log_info "Total applications: $APP_COUNT"
+    log_info "Enforcement enabled: ${#ENFORCEMENT_APPS[@]}"
+    log_info "Discovery mode: ${#DISCOVERY_APPS[@]}"
+    log_info "Configuration errors: $POLICY_ERRORS"
     
-    if [[ $VALIDATION_ERRORS -eq 0 ]]; then
-        log_success "All configuration tests passed!"
-        log_info "Configuration is ready for BD SelfScan container scanning"
-        log_info "Enhanced features available:"
-        log_info "  ✓ Intelligent version detection"
-        log_info "  ✓ Explicit version overrides via projectVersion"
-        log_info "  ✓ Automatic 'latest' tag conversion"
-        log_info "  ✓ Support for semantic versions, build IDs, and date formats"
+    if [[ ${#ENFORCEMENT_APPS[@]} -gt 0 ]]; then
+        log_info ""
+        log_info "Applications with policy enforcement:"
+        for app in "${ENFORCEMENT_APPS[@]}"; do
+            log_info "  - $app"
+        done
+        log_info ""
+        log_info "These applications will:"
+        log_info "  ✓ Report vulnerabilities to Black Duck"
+        log_info "  ✓ FAIL scans on policy violations"  
+        log_info "  ✓ BLOCK builds/deployments when violations found"
+    fi
+    
+    if [[ ${#DISCOVERY_APPS[@]} -gt 0 ]]; then
+        log_info ""
+        log_info "Applications in discovery mode:"
+        for app in "${DISCOVERY_APPS[@]}"; do
+            log_info "  - $app"
+        done
+        log_info ""
+        log_info "These applications will:"
+        log_info "  ✓ Report vulnerabilities to Black Duck"
+        log_info "  ✓ Always succeed regardless of findings"
+        log_info "  ✓ Never block builds/deployments"
+    fi
+    
+    # Policy migration recommendations
+    log_section "=== Policy Migration Recommendations ==="
+    
+    if [[ ${#DISCOVERY_APPS[@]} -eq $APP_COUNT ]]; then
+        log_info "All applications in discovery mode - good for initial rollout"
+        log_info "Next steps:"
+        log_info "  1. Review scan results in Black Duck for baseline understanding"
+        log_info "  2. Enable enforcement on low-risk applications first"
+        log_info "  3. Use 'BLOCKER' only for initial enforcement"
+        log_info "  4. Gradually tighten policies based on application criticality"
+        
+    elif [[ ${#ENFORCEMENT_APPS[@]} -eq $APP_COUNT ]]; then
+        log_info "All applications have policy enforcement - mature security posture"
+        log_info "Monitor for:"
+        log_info "  1. Excessive scan failures blocking development"
+        log_info "  2. Need for security exceptions in Black Duck"  
+        log_info "  3. Policy tuning based on false positives"
+        
+    else
+        log_info "Mixed enforcement model - balanced approach"
+        log_info "Continue with:"
+        log_info "  1. Gradual migration of discovery apps to enforcement"
+        log_info "  2. Monitor enforcement apps for policy effectiveness"
+        log_info "  3. Adjust policies based on business risk tolerance"
+    fi
+    
+    # Test execution recommendations
+    if [[ "$TEST_MODE" == "preview" ]]; then
+        log_info ""
+        log_info "Test Execution Options:"
+        log_info "  Preview mode (current): Configuration analysis only"
+        log_info "  Dry-run mode: $0 $CONFIG_FILE dry-run"
+        log_info "  Live test mode: $0 $CONFIG_FILE live"
+        
+    elif [[ "$TEST_MODE" == "dry-run" ]]; then
+        log_info ""
+        log_info "Dry-run completed - no actual scans performed"
+        log_info "To test with actual scans: $0 $CONFIG_FILE live"
+        
+    elif [[ "$TEST_MODE" == "live" ]]; then
+        if [[ $POLICY_ERRORS -eq 0 ]]; then
+            log_success "Configuration validation passed - ready for live scanning"
+            log_info "To run scans: /scripts/scan-all-applications.sh"
+        else
+            log_error "Fix configuration errors before running live scans"
+        fi
+    fi
+    
+    # Exit with appropriate code
+    if [[ $POLICY_ERRORS -eq 0 ]]; then
+        log_success "Policy gating testing completed successfully"
         exit 0
     else
-        log_error "Configuration testing failed with $VALIDATION_ERRORS errors"
-        log_error "Please fix the issues above before running scans"
+        log_error "Policy gating testing completed with $POLICY_ERRORS errors"
         exit 1
     fi
+
+  # NEW: Policy enforcement simulation script
+  simulate-policy-enforcement.sh: |
+    #!/bin/bash
+    # BD SelfScan Policy Enforcement Simulation Script v1.0.0
+    # Purpose: Simulate policy enforcement behavior without running actual scans
+    set -euo pipefail
+    
+    source /scripts/common-functions.sh 2>/dev/null || {
+        echo "[ERROR] Cannot load common functions"
+        exit 1
+    }
+    
+    APP_NAME="${1:-}"
+    SIMULATE_FINDINGS="${2:-moderate}"  # none, low, moderate, high, critical
+    
+    if [[ -z "$APP_NAME" ]]; then
+        log_error "Usage: $0 <application_name> [simulate_findings]"
+        log_info "Examples:"
+        log_info "  $0 'OWASP WebGoat' critical"
+        log_info "  $0 'Production API' moderate"
+        log_info "  $0 'Dev Tool' none"
+        exit 1
+    fi
+    
+    log_section "=== Policy Enforcement Simulation ==="
+    log_info "Application: $APP_NAME"
+    log_info "Simulated findings: $SIMULATE_FINDINGS"
+    
+    CONFIG_FILE="/config/applications.yaml"
+    
+    # Read policy configuration for the application
+    if ! yq e ".applications[] | select(.name == \"$APP_NAME\")" "$CONFIG_FILE" >/dev/null 2>&1; then
+        log_error "Application '$APP_NAME' not found in configuration"
+        exit 1
+    fi
+    
+    POLICY_GATING=$(yq e ".applications[] | select(.name == \"$APP_NAME\") | .policyGating // false" "$CONFIG_FILE")
+    POLICY_GATING_RISK=$(yq e ".applications[] | select(.name == \"$APP_NAME\") | .policyGatingRisk // \"\"" "$CONFIG_FILE")
+    PROJECT_TIER=$(yq e ".applications[] | select(.name == \"$APP_NAME\") | .projectTier // 3" "$CONFIG_FILE")
+    
+    # Determine effective policy severities
+    if [[ "$POLICY_GATING" == "true" ]]; then
+        if [[ -n "$POLICY_GATING_RISK" && "$POLICY_GATING_RISK" != "null" && "$POLICY_GATING_RISK" != '""' ]]; then
+            EFFECTIVE_POLICY="$POLICY_GATING_RISK"
+        else
+            case "$PROJECT_TIER" in
+                1) EFFECTIVE_POLICY="BLOCKER,CRITICAL,HIGH";;
+                2) EFFECTIVE_POLICY="BLOCKER,CRITICAL";;
+                3) EFFECTIVE_POLICY="BLOCKER,CRITICAL";;
+                4) EFFECTIVE_POLICY="BLOCKER";;
+                *) EFFECTIVE_POLICY="BLOCKER,CRITICAL";;
+            esac
+        fi
+        ENFORCEMENT_MODE="ENABLED"
+    else
+        EFFECTIVE_POLICY=""
+        ENFORCEMENT_MODE="DISABLED"
+    fi
+    
+    log_info "Policy enforcement: $ENFORCEMENT_MODE"
+    if [[ "$ENFORCEMENT_MODE" == "ENABLED" ]]; then
+        log_info "Policy severities: $EFFECTIVE_POLICY"
+    fi
+    
+    # Simulate vulnerability findings
+    log_section "=== Simulated Vulnerability Scan Results ==="
+    
+    case "$SIMULATE_FINDINGS" in
+        none)
+            log_success "No vulnerabilities found"
+            FOUND_BLOCKER=false
+            FOUND_CRITICAL=false
+            FOUND_HIGH=false
+            ;;
+        low)
+            log_info "Found vulnerabilities: LOW (3), TRIVIAL (7)"
+            FOUND_BLOCKER=false
+            FOUND_CRITICAL=false
+            FOUND_HIGH=false
+            ;;
+        moderate)
+            log_warning "Found vulnerabilities: MEDIUM (2), LOW (5), TRIVIAL (10)"
+            FOUND_BLOCKER=false
+            FOUND_CRITICAL=false
+            FOUND_HIGH=false
+            ;;
+        high)
+            log_warning "Found vulnerabilities: HIGH (1), MEDIUM (3), LOW (8)"
+            FOUND_BLOCKER=false
+            FOUND_CRITICAL=false
+            FOUND_HIGH=true
+            ;;
+        critical)
+            log_error "Found vulnerabilities: CRITICAL (2), HIGH (1), MEDIUM (4), LOW (12)"
+            FOUND_BLOCKER=false
+            FOUND_CRITICAL=true
+            FOUND_HIGH=true
+            ;;
+        blocker)
+            log_error "Found vulnerabilities: BLOCKER (1), CRITICAL (3), HIGH (2), MEDIUM (6)"
+            FOUND_BLOCKER=true
+            FOUND_CRITICAL=true
+            FOUND_HIGH=true
+            ;;
+        *)
+            log_error "Invalid simulation mode: $SIMULATE_FINDINGS"
+            log_info "Valid modes: none, low, moderate, high, critical, blocker"
+            exit 1
+            ;;
+    esac
+    
+    # Simulate policy enforcement decision
+    log_section "=== Policy Enforcement Simulation ==="
+    
+    if [[ "$ENFORCEMENT_MODE" == "DISABLED" ]]; then
+        log_info "Policy enforcement DISABLED - scan would always succeed"
+        log_success "SIMULATION RESULT: SCAN PASSES (discovery mode)"
+        log_info "All vulnerabilities reported to Black Duck for visibility"
+        exit 0
+    fi
+    
+    # Check if any found vulnerabilities match enforcement policy
+    POLICY_VIOLATION=false
+    VIOLATION_DETAILS=()
+    
+    IFS=',' read -ra POLICY_ARRAY <<< "$EFFECTIVE_POLICY"
+    for severity in "${POLICY_ARRAY[@]}"; do
+        severity=$(echo "$severity" | xargs | tr '[:lower:]' '[:upper:]')
+        
+        case "$severity" in
+            BLOCKER)
+                if [[ "$FOUND_BLOCKER" == "true" ]]; then
+                    POLICY_VIOLATION=true
+                    VIOLATION_DETAILS+=("BLOCKER severity violations found")
+                fi
+                ;;
+            CRITICAL)
+                if [[ "$FOUND_CRITICAL" == "true" ]]; then
+                    POLICY_VIOLATION=true
+                    VIOLATION_DETAILS+=("CRITICAL severity violations found")
+                fi
+                ;;
+            HIGH)
+                if [[ "$FOUND_HIGH" == "true" ]]; then
+                    POLICY_VIOLATION=true
+                    VIOLATION_DETAILS+=("HIGH severity violations found")
+                fi
+                ;;
+        esac
+    done
+    
+    # Report simulation result
+    if [[ "$POLICY_VIOLATION" == "true" ]]; then
+        log_error "SIMULATION RESULT: SCAN FAILS (policy violation)"
+        log_error "Policy violations detected:"
+        for violation in "${VIOLATION_DETAILS[@]}"; do
+            log_error "  - $violation"
+        done
+        log_error "Build/deployment would be BLOCKED"
+        log_info ""
+        log_info "Resolution options:"
+        log_info "  1. Fix vulnerabilities in the application"
+        log_info "  2. Set policyGating: false for discovery mode"
+        log_info "  3. Adjust policyGatingRisk to be more lenient"
+        log_info "  4. Create security exceptions in Black Duck"
+        exit 9  # Policy violation exit code
+    else
+        log_success "SIMULATION RESULT: SCAN PASSES (no policy violations)"
+        log_info "All found vulnerabilities are below enforcement threshold"
+        log_info "Build/deployment would proceed normally"
+        exit 0
+    fi
+    
