@@ -30,6 +30,7 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     openjdk-17-jre \
     skopeo \
+    unzip \
     # Add error handling and verification
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
