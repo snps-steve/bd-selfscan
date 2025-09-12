@@ -27,6 +27,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      attestations: write  # Added for attestations
+      id-token: write      # Added for attestations
 
     steps:
       - name: Checkout repository
@@ -57,6 +59,7 @@ jobs:
             type=sha,prefix={{branch}}-
 
       - name: Build and push Docker image
+        id: build-and-push  # Added explicit ID for clarity
         uses: docker/build-push-action@v5
         with:
           context: ./docker
@@ -71,5 +74,5 @@ jobs:
         uses: actions/attest-build-provenance@v1
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.build-and-push.outputs.digest }}  
           push-to-registry: true
