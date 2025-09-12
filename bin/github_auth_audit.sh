@@ -1,6 +1,7 @@
 #!/bin/bash
 # GitHub Authentication Audit Script
 # Checks all possible locations for GitHub tokens and authentication
+# Fixed version with proper bash syntax
 
 set -euo pipefail
 
@@ -32,8 +33,9 @@ github_env_vars=(
 found_env_vars=0
 for var in "${github_env_vars[@]}"; do
     if [[ -n "${!var:-}" ]]; then
-        token_length=${#!var}
-        masked_token="${!var:0:7}***${!var: -4}"
+        token_value="${!var}"
+        token_length=${#token_value}
+        masked_token="${token_value:0:7}***${token_value: -4}"
         log_success "$var is set (${token_length} chars): $masked_token"
         found_env_vars=$((found_env_vars + 1))
     else
@@ -248,6 +250,7 @@ else
     echo "❌ You need to set up GitHub authentication"
     echo ""
     echo "Next steps:"
-    echo "1. Create a GitHub Personal Access Token"
+    echo "1. Create a GitHub Personal Access Token at:"
+    echo "   https://github.com/settings/tokens"
     echo "2. Run: echo 'your_token' | docker login ghcr.io -u your-username --password-stdin"
 fi
