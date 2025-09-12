@@ -394,6 +394,7 @@ validate_target() {
 }
 
 # Enhanced function to ensure project group exists
+# FIXED: Enhanced function to ensure project group exists with correct API headers
 ensure_project_group() {
     local project_group_name="$1"
     
@@ -410,39 +411,54 @@ ensure_project_group() {
         curl_args+=(--insecure)
     fi
     
-    # Check if project group already exists
-    local search_url="$BD_URL/api/project-groups?q=name:$project_group_name"
+    # FIXED: Check if project group already exists with correct Accept header
+    local search_url="$BD_URL/api/project-groups?q=name:$(echo "$project_group_name" | sed 's/ /%20/g')"
     curl_args+=(-H "Authorization: Bearer $BD_BEARER_TOKEN")
-    curl_args+=(-H "Accept: application/vnd.blackducksoftware.project-group-4+json")
+    curl_args+=(-H "Accept: application/json")  # FIXED: Use generic JSON Accept header
+    curl_args+=(-w "%{http_code}")
     curl_args+=("$search_url")
     
     local search_response
     if search_response=$(curl "${curl_args[@]}" 2>/dev/null); then
-        # Check if project group exists (look for totalCount > 0 or items array)
-        local exists=false
-        if command -v jq >/dev/null 2>&1; then
-            local total_count
-            total_count=$(echo "$search_response" | jq -r '.totalCount // 0' 2>/dev/null)
-            if [[ "$total_count" -gt 0 ]]; then
-                exists=true
+        # Extract HTTP status and response body
+        local http_status="${search_response: -3}"
+        local response_body="${search_response%???}"
+        
+        log_debug "Project group search HTTP status: $http_status"
+        
+        if [[ "$http_status" == "200" ]]; then
+            # Check if project group exists
+            local exists=false
+            if command -v jq >/dev/null 2>&1; then
+                local total_count
+                total_count=$(echo "$response_body" | jq -r '.totalCount // 0' 2>/dev/null)
+                if [[ "$total_count" -gt 0 ]]; then
+                    exists=true
+                fi
+            else
+                # Fallback check without jq
+                if echo "$response_body" | grep -q "\"name\":\"$project_group_name\""; then
+                    exists=true
+                fi
+            fi
+            
+            if [[ "$exists" == "true" ]]; then
+                log_success "Project Group '$project_group_name' already exists"
+                return 0
             fi
         else
-            # Fallback check without jq
-            if echo "$search_response" | grep -q "\"name\":\"$project_group_name\""; then
-                exists=true
-            fi
+            log_warning "Project group search failed with HTTP $http_status, attempting to create anyway"
         fi
-        
-        if [[ "$exists" == "true" ]]; then
-            log_success "Project Group '$project_group_name' already exists"
-            return 0
-        fi
+    else
+        log_warning "Project group search failed, attempting to create anyway"
     fi
     
-    # Create the project group
+    # FIXED: Create the project group with correct headers
     log_info "Creating Project Group: $project_group_name"
     
-    local create_data="{\"name\":\"$project_group_name\",\"description\":\"Created by BD SelfScan for container vulnerability scanning\"}"
+    # Clean project group name (remove special characters that might cause issues)
+    local clean_name=$(echo "$project_group_name" | sed 's/[^a-zA-Z0-9 ._()-]//g')
+    local create_data="{\"name\":\"$clean_name\",\"description\":\"Created by BD SelfScan for container vulnerability scanning\"}"
     
     curl_args=(-s --connect-timeout 30 --max-time 60)
     if [[ "$TRUST_CERT" == "true" ]]; then
@@ -450,8 +466,8 @@ ensure_project_group() {
     fi
     curl_args+=(-X POST)
     curl_args+=(-H "Authorization: Bearer $BD_BEARER_TOKEN")
-    curl_args+=(-H "Content-Type: application/json")
-    curl_args+=(-H "Accept: application/vnd.blackducksoftware.project-group-4+json")
+    curl_args+=(-H "Content-Type: application/json")  # FIXED: Explicit Content-Type
+    curl_args+=(-H "Accept: application/json")        # FIXED: Use generic JSON Accept header
     curl_args+=(-d "$create_data")
     curl_args+=(-w "%{http_code}")
     curl_args+=("$BD_URL/api/project-groups")
@@ -459,15 +475,32 @@ ensure_project_group() {
     local create_response
     if create_response=$(curl "${curl_args[@]}" 2>/dev/null); then
         local http_status="${create_response: -3}"
+        local response_body="${create_response%???}"
         
-        if [[ "$http_status" == "201" ]]; then
-            log_success "Project Group '$project_group_name' created successfully"
-            return 0
-        else
-            log_error "Failed to create project group (HTTP $http_status)"
-            log_debug "Response: ${create_response%???}"
-            return 1
-        fi
+        log_debug "Project group creation HTTP status: $http_status"
+        log_debug "Project group creation response: $response_body"
+        
+        case "$http_status" in
+            201)
+                log_success "Project Group '$project_group_name' created successfully"
+                return 0
+                ;;
+            406)
+                log_error "HTTP 406 Not Acceptable - API compatibility issue"
+                log_error "This may indicate a Black Duck server version compatibility problem"
+                log_info "Try manually creating the project group in Black Duck UI: '$project_group_name'"
+                return 1
+                ;;
+            409)
+                log_warning "Project Group '$project_group_name' already exists (HTTP 409 conflict)"
+                return 0  # Treat as success
+                ;;
+            *)
+                log_error "Failed to create project group (HTTP $http_status)"
+                log_debug "Response: $response_body"
+                return 1
+                ;;
+        esac
     else
         log_error "Failed to create project group - connection error"
         return 1
