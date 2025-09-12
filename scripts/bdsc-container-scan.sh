@@ -71,22 +71,32 @@ validate_environment() {
         return 1
     fi
     
+    # Set defaults for optional variables
+    export PROJECT_TIER="${PROJECT_TIER:-3}"
+    export PROJECT_PHASE="${PROJECT_PHASE:-DEVELOPMENT}"  # Default to DEVELOPMENT
+    export TRUST_CERT="${TRUST_CERT:-true}"
+    export DEBUG_ENABLED="${DEBUG_ENABLED:-false}"
+    
+    # Validate PROJECT_PHASE value against valid Black Duck phases
+    case "${PROJECT_PHASE}" in
+        PLANNING|DEVELOPMENT|PRERELEASE|RELEASED|DEPRECATED|ARCHIVED)
+            log_debug "Using project phase: $PROJECT_PHASE"
+            ;;
+        *)
+            log_warning "Invalid PROJECT_PHASE value: $PROJECT_PHASE"
+            log_warning "Valid phases: PLANNING, DEVELOPMENT, PRERELEASE, RELEASED, DEPRECATED, ARCHIVED"
+            log_warning "Using DEVELOPMENT as default."
+            export PROJECT_PHASE="DEVELOPMENT"
+            ;;
+    esac
+    
     # Validate URL format
     if [[ ! "$BD_URL" =~ ^https?:// ]]; then
         log_error "BD_URL must start with http:// or https://"
         return 1
     fi
     
-    # Remove trailing slash from BD_URL if present
-    BD_URL="${BD_URL%/}"
-    export BD_URL
-    
-    # Set defaults for optional variables
-    export PROJECT_TIER="${PROJECT_TIER:-3}"
-    export TRUST_CERT="${TRUST_CERT:-true}"
-    export DEBUG_ENABLED="${DEBUG_ENABLED:-false}"
-    export SCAN_TIMEOUT="${SCAN_TIMEOUT:-1800}"
-    
+    log_success "All required environment variables are set"
     return 0
 }
 
@@ -618,7 +628,7 @@ scan_container_image() {
         --detect.project.version.name="$project_version"
         --detect.project.group.name="$DESIRED_PROJECT_GROUP"
         --detect.project.tier="$PROJECT_TIER"
-        --detect.project.version.phase=DEVELOPMENT           
+        --detect.project.version.phase="$PROJECT_PHASE"           
         --detect.tools=CONTAINER_SCAN
         --detect.container.scan.file.path="$tar_file"        
         --logging.level.com.synopsys.integration=INFO

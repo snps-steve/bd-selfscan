@@ -198,10 +198,11 @@ load_app_config() {
     fi
 
     # Export configuration as environment variables for the scanner
-    export TARGET_NS="$config_namespace"
-    export LABEL_SELECTOR="$config_selector"
-    export DESIRED_PROJECT_GROUP="$config_group"
-    export PROJECT_TIER="$config_tier"
+    export TARGET_NS=$(echo "$app_data" | yq eval '.namespace // "default"' -)
+    export LABEL_SELECTOR=$(echo "$app_data" | yq eval '.labelSelector // "app"' -)
+    export DESIRED_PROJECT_GROUP=$(echo "$app_data" | yq eval '.projectGroup // "BD SelfScan"' -)
+    export PROJECT_TIER=$(echo "$app_data" | yq eval '.projectTier // "3"' -)
+    export PROJECT_PHASE=$(echo "$app_data" | yq eval '.projectPhase // "DEVELOPMENT"' -)  
 
     log_success "Configuration loaded successfully"
     log_info "  Application: $app_name"

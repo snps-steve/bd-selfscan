@@ -2,15 +2,16 @@
 # Maps Kubernetes applications to Black Duck Project Groups
 
 applications:
-  # Test case - My BD SCA deployment
-  - name: "Black Duck SCA"
-    namespace: "bd"
-    labelSelector: "app=blackduck"
-    projectGroup: "Black Duck SCA"
-    projectTier: 2
-    scanOnDeploy: true
-    scanSchedule: "0 2 * * 0"  # Weekly Sunday 2AM (Phase 2)
-    description: "Black Duck SCA platform components for vulnerability and license scanning"
+  # Example Application - OWASP WebGoat Security Training
+  - name: "OWASP WebGoat"   # Required field
+    namespace: "default"  # Required field
+    labelSelector: "app=webgoat-official"  # Required field
+    projectGroup: "OWASP WebGoat Security Training"  # Required field
+    projectTier: 2  # Optional field
+    projectPhase: "DEVELOPMENT"  # Required field
+    scanOnDeploy: true # Optional field
+    scanSchedule: "0 2 * * 0" # Weekly Sunday 2AM (Phase 2) # Optional field
+    description: "OWASP WebGoat Official (webgoat/webgoat:latest) - deliberately vulnerable web application" # Optional field
 
 # Configuration Schema Documentation:
 #
@@ -19,6 +20,14 @@ applications:
 #   namespace: Kubernetes namespace where the application is deployed
 #   labelSelector: Kubernetes label selector to find pods (supports multiple labels)
 #   projectGroup: Black Duck Project Group name (will be created if it doesn't exist)
+#
+# Valid Black Duck Project Version Phases:
+# - PLANNING: Early development, requirements gathering
+# - DEVELOPMENT: Active development, testing
+# - PRERELEASE: Pre-release testing, staging
+# - RELEASED: Production deployment, released to users  
+# - DEPRECATED: Legacy, being phased out
+# - ARCHIVED: No longer maintained, archived
 #
 # Optional Fields:
 #   projectTier: Priority tier for scanning policies (1=Critical, 2=High, 3=Medium, 4=Low)
