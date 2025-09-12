@@ -24,7 +24,7 @@ This license:
 - Prohibits use in competing or commercial products.
 - May convert to a more permissive license in the future but isn't an option right now.
  
-Please see the LICENSE and NOTICE files located with the source.
+Please see the [LICENSE](https://github.com/snps-steve/bd-selfscan/blob/main/LICENSE.txt) and [NOTICE](https://github.com/snps-steve/bd-selfscan/blob/main/NOTICE.txt) located with the source.
 
 ## 🏗️ Architecture & Design
 
