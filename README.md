@@ -1,6 +1,6 @@
 # Black Duck SelfScan for Kubernetes
 
-A Open Source solution for integrating Black Duck SCA's Detect into Kubernetes clusters to scan containerized applications using Black Duck Secure Container (BDSC). This
+A solution for integrating Black Duck SCA's Detect into Kubernetes clusters to scan containerized applications using Black Duck Secure Container (BDSC). This
 project is sponsored and maintained by an employee of Black Duck but is not an "official" Black Duck product or solution.
 
 Note: requires a licensed Registration ID, Black Duck Binary Analysis, Black Duck Secure Container (BDSC), and Match as a Service (MaaS). 
@@ -13,6 +13,18 @@ BD SelfScan enables organizations to secure their container deployments by:
 - **Organizing results** in Black Duck using a microservices-friendly project structure
 - **Enforcing security policies** with per-application policy gating and build failure controls
 - **Automating scans** through Kubernetes Jobs and event-driven triggers
+
+## 🔒Licensing & Legal Rights and Obligations
+
+The BD SelfScan project is not provided under any OSI compliant (aka open source) licensing. BD SelfScan is offereed under a Business Source License (BSL) 
+
+This license:
+
+- Allows free use for non-commercial purposes.
+- Prohibits use in competing or commercial products.
+- May convert to a more permissive license in the future but isn't an option right now.
+ 
+Please see the NOTICE file located with the source.
 
 ## 🏗️ Architecture & Design
 
