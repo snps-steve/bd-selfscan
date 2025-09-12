@@ -51,7 +51,7 @@ RUN wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/downloa
 
 # Pre-download and verify Detect script
 RUN mkdir -p /opt/detect \
-    && curl -L -o /opt/detect/detect.sh https://detect.synopsys.com/detect7.sh \
+    && curl -L -o /opt/detect/detect.sh https://detect.blackduck.com/detect10.sh \
     && chmod +x /opt/detect/detect.sh \
     # Verify the script downloaded successfully
     && test -f /opt/detect/detect.sh \

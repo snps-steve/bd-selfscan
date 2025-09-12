@@ -211,7 +211,7 @@ setup_detect() {
     cd "$TEMP_DIR/detect"
     
     # Download Detect script with retries and validation
-    local detect_url="https://detect.synopsys.com/detect7.sh"
+    local detect_url="https://detect.blackduck.com/detect10.sh"
     local retries=3
     local attempt=1
     
