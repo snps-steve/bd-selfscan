@@ -1,7 +1,7 @@
 #!/bin/bash
-# BD SelfScan Diagnostic Script v2.0
-# Enhanced diagnostics for Phase 1 & Phase 2 implementation
-# Run this to diagnose issues with container scanning
+# BD SelfScan Diagnostic Script v2.1
+# Enhanced diagnostics for Phase 1 & Phase 2 implementation with Policy Health Checks
+# Run this to diagnose issues with container scanning and policy enforcement
 
 # Color output for better readability
 RED='\033[0;31m'
@@ -19,7 +19,7 @@ log_warning() { echo -e "${YELLOW}[WARNING]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*
 log_error() { echo -e "${RED}[ERROR]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2; }
 log_section() { echo -e "\n${CYAN}$*${NC}" >&2; }
 
-echo "🔍 BD SelfScan Diagnostic Report v2.0"
+echo "🔍 BD SelfScan Diagnostic Report v2.1"
 echo "====================================="
 echo ""
 
@@ -54,17 +54,39 @@ else
 fi
 echo ""
 
-# 2. Enhanced job status with better filtering
-log_section "📋 Job Status:"
+# 2. Enhanced job status with policy violation tracking
+log_section "📋 Job Status & Policy Violations:"
 microk8s kubectl get jobs -n bd-selfscan-system -o wide --sort-by=.metadata.creationTimestamp
 echo ""
 log_info "Recent job completions:"
 microk8s kubectl get jobs -n bd-selfscan-system --field-selector=status.successful=1 -o custom-columns=NAME:.metadata.name,COMPLETIONS:.spec.completions,DURATION:.status.completionTime | tail -5
 echo ""
 
-# 3. Enhanced events with better filtering
+# NEW: Check for policy violations (exit code 9)
+log_info "Policy violation analysis (exit code 9):"
+POLICY_VIOLATIONS=$(microk8s kubectl get jobs -n bd-selfscan-system -o yaml 2>/dev/null | grep -c '"exitCode": 9' || echo "0")
+if [ "$POLICY_VIOLATIONS" -gt 0 ]; then
+    log_warning "Found $POLICY_VIOLATIONS job(s) with policy violations (exit code 9)"
+    log_info "Recent policy violations:"
+    microk8s kubectl get jobs -n bd-selfscan-system -o yaml | grep -B3 -A1 '"exitCode": 9' | head -10
+else
+    log_success "No policy violations detected in recent jobs"
+fi
+echo ""
+
+# 3. Enhanced events with policy-related filtering
 log_section "📅 Recent Events (Last 20):"
 microk8s kubectl get events -n bd-selfscan-system --sort-by='.lastTimestamp' | tail -20
+echo ""
+
+# NEW: Policy-specific events
+log_info "Policy-related events:"
+POLICY_EVENTS=$(microk8s kubectl get events -n bd-selfscan-system 2>/dev/null | grep -i -c "policy\|violation\|gating" || echo "0")
+if [ "$POLICY_EVENTS" -gt 0 ]; then
+    microk8s kubectl get events -n bd-selfscan-system | grep -i "policy\|violation\|gating" | tail -5
+else
+    log_info "No policy-related events found"
+fi
 echo ""
 
 # 4. Enhanced resource checks with Phase 2 resources
@@ -84,6 +106,40 @@ if [ "$PHASE1_ONLY" = "false" ]; then
     microk8s kubectl get services -n bd-selfscan-system
     echo ""
 fi
+
+# NEW: Policy configuration health check
+log_section "⚖️  Policy Configuration Health:"
+log_info "Checking policy configuration validity..."
+POLICY_CONFIG_VALID=true
+
+# Check if applications config exists and is readable
+if microk8s kubectl get configmap bd-selfscan-applications -n bd-selfscan-system >/dev/null 2>&1; then
+    log_success "Applications configmap exists"
+    
+    # Check for basic policy configuration issues
+    POLICY_ENABLED_APPS=$(microk8s kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml 2>/dev/null | grep -c "policyGating.*true" || echo "0")
+    log_info "Found $POLICY_ENABLED_APPS application(s) with policy gating enabled"
+    
+    # Check for invalid policy severities (basic validation)
+    INVALID_SEVERITIES=$(microk8s kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml 2>/dev/null | grep -i "policyGatingRisk" | grep -v -E "BLOCKER|CRITICAL|HIGH|MEDIUM|LOW|TRIVIAL|UNSPECIFIED|ALL|NONE" | wc -l || echo "0")
+    if [ "$INVALID_SEVERITIES" -gt 0 ]; then
+        log_warning "Potential invalid policy severities detected - recommend running policy validation"
+        POLICY_CONFIG_VALID=false
+    else
+        log_success "Policy severity values appear valid"
+    fi
+else
+    log_error "Applications configmap missing or inaccessible"
+    POLICY_CONFIG_VALID=false
+fi
+
+# Policy validation recommendation
+if [ "$POLICY_CONFIG_VALID" = "false" ]; then
+    log_warning "Policy configuration issues detected. Recommend running:"
+    echo "  kubectl create job bd-policy-test --from=cronjob/bd-selfscan -n bd-selfscan-system"
+    echo "  kubectl exec -it job/bd-policy-test -n bd-selfscan-system -- /scripts/test-policy-gating.sh /config/applications.yaml preview"
+fi
+echo ""
 
 # 5. Enhanced RBAC checks
 log_section "🛡️  RBAC Configuration:"
@@ -124,144 +180,86 @@ else
 fi
 echo ""
 
-# 7. Enhanced node resources
-log_section "💾 System Resources:"
-echo "Node resources:"
-microk8s kubectl top nodes 2>/dev/null || echo "Metrics server not available"
-echo ""
+# 7. Network connectivity checks
+log_section "🌐 Network Connectivity:"
+echo "DNS Resolution Test:"
+microk8s kubectl run dns-test --image=busybox:latest --rm -it --restart=Never --command -- nslookup kubernetes.default 2>/dev/null && echo "✅ DNS working" || echo "❌ DNS issues detected"
 
-if [ "$PHASE1_ONLY" = "false" ]; then
-    echo "Pod resource usage:"
-    microk8s kubectl top pods -n bd-selfscan-system 2>/dev/null || echo "Pod metrics not available"
+# Check Black Duck connectivity (if pods are available)
+if [ -n "$SCANNER_POD" ]; then
     echo ""
-fi
-
-# 8. Enhanced MicroK8s status
-log_section "🔧 MicroK8s Status:"
-microk8s status | grep -E "(registry|dns|rbac|storage|ingress|metrics-server)" || echo "Core addons status unavailable"
-echo ""
-
-# 9. NEW: Configuration validation
-log_section "⚙️  Configuration Validation:"
-echo "Application configuration:"
-if microk8s kubectl get configmap bd-selfscan-applications -n bd-selfscan-system >/dev/null 2>&1; then
-    APP_COUNT=$(microk8s kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o jsonpath='{.data.applications\.yaml}' 2>/dev/null | grep -c "^  - name:" 2>/dev/null || echo "0")
-    echo "✅ Applications ConfigMap exists ($APP_COUNT applications configured)"
-else
-    echo "❌ Applications ConfigMap missing"
-fi
-
-echo "Black Duck credentials:"
-if microk8s kubectl get secret blackduck-creds -n bd-selfscan-system >/dev/null 2>&1; then
-    echo "✅ Black Duck credentials exist"
-    # Check if we can decode the URL (basic validation)
+    echo "Black Duck Connectivity (from scanner pod):"
     BD_URL=$(microk8s kubectl get secret blackduck-creds -n bd-selfscan-system -o jsonpath='{.data.url}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
     if [ -n "$BD_URL" ]; then
-        echo "   Black Duck URL: $BD_URL"
-    fi
-else
-    echo "❌ Black Duck credentials missing"
-fi
-echo ""
-
-# 10. NEW: Phase 2 specific checks
-if [ "$PHASE1_ONLY" = "false" ]; then
-    log_section "🤖 Phase 2 Controller Status:"
-    
-    # Check controller health
-    echo "Controller health status:"
-    CONTROLLER_READY=$(microk8s kubectl get deployment bd-selfscan-controller -n bd-selfscan-system -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-    CONTROLLER_DESIRED=$(microk8s kubectl get deployment bd-selfscan-controller -n bd-selfscan-system -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
-    
-    if [ "$CONTROLLER_READY" = "$CONTROLLER_DESIRED" ] && [ "$CONTROLLER_READY" != "0" ]; then
-        echo "✅ Controller deployment ready ($CONTROLLER_READY/$CONTROLLER_DESIRED)"
+        timeout 10 microk8s kubectl exec -n bd-selfscan-system $SCANNER_POD -- curl -k -s --connect-timeout 5 "$BD_URL/api/current-user" >/dev/null 2>&1 && echo "✅ Black Duck reachable" || echo "❌ Black Duck connectivity issues"
     else
-        echo "❌ Controller deployment not ready ($CONTROLLER_READY/$CONTROLLER_DESIRED)"
+        echo "ℹ️  Black Duck URL not available for testing"
     fi
-    
-    # Check if metrics endpoint is accessible
-    echo "Checking controller endpoints..."
-    if microk8s kubectl get service bd-selfscan-controller -n bd-selfscan-system >/dev/null 2>&1; then
-        echo "✅ Controller service exists"
-        METRICS_PORT=$(microk8s kubectl get service bd-selfscan-controller -n bd-selfscan-system -o jsonpath='{.spec.ports[?(@.name=="metrics")].port}' 2>/dev/null || echo "")
-        if [ -n "$METRICS_PORT" ]; then
-            echo "   Metrics port: $METRICS_PORT"
-        fi
-    else
-        echo "❌ Controller service missing"
-    fi
-    echo ""
 fi
-
-# 11. NEW: Recent scan results summary
-log_section "📈 Recent Scan Activity:"
-echo "Scan job history (last 10):"
-microk8s kubectl get jobs -n bd-selfscan-system --sort-by=.metadata.creationTimestamp -o custom-columns=NAME:.metadata.name,STATUS:.status.conditions[0].type,COMPLETIONS:.spec.completions,DURATION:.status.completionTime,AGE:.metadata.creationTimestamp | tail -10
 echo ""
 
-SUCCESSFUL_SCANS=$(microk8s kubectl get jobs -n bd-selfscan-system --field-selector=status.successful=1 --no-headers 2>/dev/null | wc -l)
-FAILED_SCANS=$(microk8s kubectl get jobs -n bd-selfscan-system --field-selector=status.failed=1 --no-headers 2>/dev/null | wc -l)
-echo "Scan success rate:"
-echo "✅ Successful scans: $SUCCESSFUL_SCANS"
-echo "❌ Failed scans: $FAILED_SCANS"
+# 8. Resource usage summary
+log_section "📈 Resource Usage Summary:"
+echo "Namespace resource consumption:"
+microk8s kubectl top pods -n bd-selfscan-system 2>/dev/null || echo "ℹ️  Metrics server not available"
 echo ""
 
-# 12. NEW: Network connectivity check
-log_section "🌐 Network Connectivity:"
-echo "Checking external connectivity..."
+# 9. Enhanced quick health summary with policy awareness
+log_section "🏥 Health Summary:"
+HEALTH_SCORE=0
+TOTAL_CHECKS=8
 
-# Test GitHub Container Registry (for image pulls)
-if timeout 5 nc -z ghcr.io 443 2>/dev/null; then
-    echo "✅ GitHub Container Registry: Accessible"
+# Basic resource checks
+microk8s kubectl get deployment bd-selfscan-controller -n bd-selfscan-system >/dev/null 2>&1 || [ "$PHASE1_ONLY" = "true" ] && HEALTH_SCORE=$((HEALTH_SCORE + 1))
+microk8s kubectl get configmap bd-selfscan-applications -n bd-selfscan-system >/dev/null 2>&1 && HEALTH_SCORE=$((HEALTH_SCORE + 1))
+microk8s kubectl get secret blackduck-creds -n bd-selfscan-system >/dev/null 2>&1 && HEALTH_SCORE=$((HEALTH_SCORE + 1))
+microk8s kubectl get clusterrole bd-selfscan >/dev/null 2>&1 && HEALTH_SCORE=$((HEALTH_SCORE + 1))
+microk8s kubectl get clusterrolebinding bd-selfscan >/dev/null 2>&1 && HEALTH_SCORE=$((HEALTH_SCORE + 1))
+
+# Job status checks
+FAILED_JOBS=$(microk8s kubectl get jobs -n bd-selfscan-system --field-selector=status.successful=0 --no-headers 2>/dev/null | wc -l)
+[ "$FAILED_JOBS" -eq 0 ] && HEALTH_SCORE=$((HEALTH_SCORE + 1))
+
+# Policy configuration health
+[ "$POLICY_CONFIG_VALID" = "true" ] && HEALTH_SCORE=$((HEALTH_SCORE + 1))
+
+# Running pods check
+RUNNING_PODS=$(microk8s kubectl get pods -n bd-selfscan-system --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l)
+FAILED_PODS=$(microk8s kubectl get pods -n bd-selfscan-system --field-selector=status.phase=Failed --no-headers 2>/dev/null | wc -l)
+[ "$FAILED_PODS" -eq 0 ] && HEALTH_SCORE=$((HEALTH_SCORE + 1))
+
+echo "Overall Health Score: $HEALTH_SCORE/$TOTAL_CHECKS"
+if [ $HEALTH_SCORE -eq $TOTAL_CHECKS ]; then
+    log_success "System appears healthy"
+elif [ $HEALTH_SCORE -ge $((TOTAL_CHECKS * 2 / 3)) ]; then
+    log_warning "System mostly healthy with minor issues"
 else
-    echo "❌ GitHub Container Registry: Not accessible"
-fi
-
-# Test Black Duck server (if URL available)
-if [ -n "$BD_URL" ]; then
-    BD_HOST=$(echo "$BD_URL" | sed -e 's|^https\?://||' -e 's|/.*$||' -e 's|:.*$||')
-    if timeout 5 nc -z "$BD_HOST" 443 2>/dev/null; then
-        echo "✅ Black Duck Server ($BD_HOST): Accessible"
-    else
-        echo "❌ Black Duck Server ($BD_HOST): Not accessible"
-    fi
-fi
-echo ""
-
-log_section "✅ Diagnostic complete!"
-echo ""
-echo "💡 Next steps:"
-echo "1. Look for any ERROR or Failed events above"
-echo "2. Check if image is pulling successfully"
-echo "3. Verify ConfigMaps and Secrets are properly created"
-
-if [ "$PHASE1_ONLY" = "true" ]; then
-    echo "4. If pod is still ContainerCreating, wait 2-3 minutes and run:"
-    echo "   microk8s kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner"
-    echo "5. To trigger a test scan:"
-    echo "   helm upgrade bd-selfscan . --set scanTarget=\"Your-App-Name\""
-else
-    echo "4. Check Phase 2 controller logs:"
-    echo "   microk8s kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller -f"
-    echo "5. Test controller health:"
-    echo "   microk8s kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8080:8080"
-    echo "   curl http://localhost:8080/health"
-    echo "6. Monitor automated scan triggers:"
-    echo "   microk8s kubectl get events -n bd-selfscan-system --sort-by='.lastTimestamp' -w"
+    log_error "System has significant health issues"
 fi
 
 echo ""
-echo "📚 For more help:"
-echo "• Documentation: docs/TROUBLESHOOTING.md"
-echo "• Configuration: docs/CONFIGURATION.md"
-echo "• Installation: docs/INSTALL.md"
+echo "📊 Summary Statistics:"
+echo "   Running pods: $RUNNING_PODS"
+echo "   Failed pods: $FAILED_PODS"
+echo "   Failed jobs: $FAILED_JOBS"
+echo "   Policy violations: $POLICY_VIOLATIONS"
+echo "   Policy-enabled apps: $POLICY_ENABLED_APPS"
 
-if [ "$SUCCESSFUL_SCANS" = "0" ] && [ "$FAILED_SCANS" -gt "0" ]; then
-    echo ""
-    log_warning "All recent scans have failed. Check scanner logs and configuration."
-    echo "Common issues:"
-    echo "• Black Duck credentials incorrect or expired"
-    echo "• Network connectivity to Black Duck server"
-    echo "• Application configuration errors"
-    echo "• Image pull issues"
-fi
+echo ""
+echo "=== Health Check Complete ==="
+
+# NEW: Quick commands reference for policy troubleshooting
+echo ""
+log_section "🛠️  Quick Troubleshooting Commands:"
+echo "# View recent scan logs with policy information:"
+echo "kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner --tail=50 | grep -E '(Policy|BLOCKER|CRITICAL|violation)'"
+echo ""
+echo "# Check for policy violations in jobs:"
+echo "kubectl get jobs -n bd-selfscan-system -o yaml | grep -B3 -A3 '\"exitCode\": 9'"
+echo ""
+echo "# Test policy configuration:"
+echo "kubectl create job bd-policy-test --from=cronjob/bd-selfscan -n bd-selfscan-system"
+echo "kubectl exec -it job/bd-policy-test -n bd-selfscan-system -- /scripts/test-policy-gating.sh /config/applications.yaml preview"
+echo ""
+echo "# View enhanced job information:"
+echo "kubectl describe job <job-name> -n bd-selfscan-system"
