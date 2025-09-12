@@ -1,8 +1,20 @@
 #!/bin/bash
-# BD SelfScan Container Scanner - CORRECTED VERSION for TAR export
+# BD SelfScan Container Scanner - ENHANCED VERSION with Intelligent Version Detection
 # Black Duck Container Scanner using BDSC for layer-by-layer analysis
+#
+# Purpose: Core BDSC scanning engine that performs vulnerability scanning on container images
+# Features: Enhanced version detection, explicit override support, intelligent auto-detection
+# Usage: Called by scan-application.sh wrapper script
+#
+# Version: 2.0.0 with intelligent version detection
+# Author: BD SelfScan Team
 
 set -euo pipefail
+
+# Script metadata
+readonly SCRIPT_NAME="$(basename "$0")"
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_VERSION="2.0.0"
 
 # Global variable declarations
 declare -g BD_BEARER_TOKEN=""
@@ -14,49 +26,68 @@ declare -g SCAN_START_TIME=""
 declare -g TEMP_DIR=""
 declare -g DETECT_SCRIPT=""
 
-# Default values
-readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Environment variable defaults
+# Environment variable defaults with enhanced configuration
 export PROJECT_TIER="${PROJECT_TIER:-3}"
+export PROJECT_PHASE="${PROJECT_PHASE:-DEVELOPMENT}"
 export TRUST_CERT="${TRUST_CERT:-true}"
 export DEBUG_ENABLED="${DEBUG_ENABLED:-false}"
 export SCAN_TIMEOUT="${SCAN_TIMEOUT:-1800}"
 export TEMP_DIR="${TEMP_DIR:-/tmp/bd-selfscan}"
+export BD_VERSION_SOURCE="${BD_VERSION_SOURCE:-auto}"
 
-# Logging functions
+# Color codes for enhanced logging
+if [[ -t 2 ]]; then
+    readonly RED='\033[0;31m'
+    readonly GREEN='\033[0;32m'
+    readonly YELLOW='\033[1;33m'
+    readonly BLUE='\033[0;34m'
+    readonly PURPLE='\033[0;35m'
+    readonly CYAN='\033[0;36m'
+    readonly NC='\033[0m'
+else
+    readonly RED=''
+    readonly GREEN=''
+    readonly YELLOW=''
+    readonly BLUE=''
+    readonly PURPLE=''
+    readonly CYAN=''
+    readonly NC=''
+fi
+
+# Enhanced logging functions with timestamps and colors
 log_info() {
-    echo "[INFO] $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
+    echo -e "${BLUE}[INFO]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
 }
 
 log_success() {
-    echo "[SUCCESS] $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
+    echo -e "${GREEN}[SUCCESS]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
 }
 
 log_warning() {
-    echo "[WARNING] $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
+    echo -e "${YELLOW}[WARNING]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
 }
 
 log_error() {
-    echo "[ERROR] $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
+    echo -e "${RED}[ERROR]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
 }
 
 log_debug() {
     if [[ "$DEBUG_ENABLED" == "true" ]]; then
-        echo "[DEBUG] $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
+        echo -e "${PURPLE}[DEBUG]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
     fi
 }
 
 log_section() {
     echo "" >&2
-    echo "$*" >&2
+    echo -e "${CYAN}$*${NC}" >&2
     echo "" >&2
 }
 
 # Function to validate environment variables
 validate_environment() {
     local missing_vars=()
+    
+    log_info "Checking environment variables..."
     
     # Check required environment variables
     [[ -z "${BD_URL:-}" ]] && missing_vars+=("BD_URL")
@@ -68,12 +99,13 @@ validate_environment() {
     
     if [[ ${#missing_vars[@]} -gt 0 ]]; then
         log_error "Missing required environment variables: ${missing_vars[*]}"
+        log_info "These variables should be set by the scan-application.sh wrapper script"
         return 1
     fi
     
-    # Set defaults for optional variables
+    # Set defaults for optional variables with validation
     export PROJECT_TIER="${PROJECT_TIER:-3}"
-    export PROJECT_PHASE="${PROJECT_PHASE:-DEVELOPMENT}"  # Default to DEVELOPMENT
+    export PROJECT_PHASE="${PROJECT_PHASE:-DEVELOPMENT}"
     export TRUST_CERT="${TRUST_CERT:-true}"
     export DEBUG_ENABLED="${DEBUG_ENABLED:-false}"
     
@@ -90,69 +122,42 @@ validate_environment() {
             ;;
     esac
     
+    # Validate PROJECT_TIER
+    if [[ ! "$PROJECT_TIER" =~ ^[1-4]$ ]]; then
+        log_warning "Invalid PROJECT_TIER '$PROJECT_TIER', using 3 as default"
+        export PROJECT_TIER="3"
+    fi
+    
     # Validate URL format
     if [[ ! "$BD_URL" =~ ^https?:// ]]; then
-        log_error "BD_URL must start with http:// or https://"
+        log_error "BD_URL must be a valid HTTP/HTTPS URL: $BD_URL"
         return 1
     fi
     
     log_success "All required environment variables are set"
-    return 0
-}
-
-# Function to properly URL encode strings for API calls
-url_encode() {
-    local string="${1}"
-    local strlen=${#string}
-    local encoded=""
-    local pos c o
-
-    for (( pos=0 ; pos<strlen ; pos++ )); do
-        c=${string:$pos:1}
-        case "$c" in
-            [-_.~a-zA-Z0-9] ) o="${c}" ;;
-            * ) printf -v o '%%%02x' "'$c" ;;
-        esac
-        encoded+="${o}"
-    done
-    echo "${encoded}"
-}
-
-# Check if required environment variables are set
-check_env_vars() {
-    log_info "Checking environment variables..."
+    log_debug "BD_URL: $BD_URL"
+    log_debug "Target namespace: $TARGET_NS"
+    log_debug "Label selector: $LABEL_SELECTOR"
+    log_debug "Project group: $DESIRED_PROJECT_GROUP"
+    log_debug "Project tier: $PROJECT_TIER"
+    log_debug "Project phase: $PROJECT_PHASE"
+    log_debug "Version source: ${BD_VERSION_SOURCE:-auto}"
     
-    if ! validate_environment; then
-        return 1
-    fi
-
-    log_success "All required environment variables are set"
     return 0
 }
 
-# Install additional tools if not present
+# Function to check and install additional tools if needed
 install_additional_tools() {
     log_info "Checking for additional tools..."
     
     local missing_tools=()
-    local install_cmd=""
+    local required_tools=("curl" "jq" "skopeo")
     
-    # Detect package manager and check for tools
-    if command -v apt-get >/dev/null 2>&1; then
-        install_cmd="apt-get update && apt-get install -y"
-    elif command -v yum >/dev/null 2>&1; then
-        install_cmd="yum install -y"
-    elif command -v apk >/dev/null 2>&1; then
-        install_cmd="apk add"
-    else
-        log_warning "No recognized package manager found. Please install missing tools manually."
-        return 0
-    fi
-    
-    # Check for required tools
-    command -v curl >/dev/null 2>&1 || missing_tools+=(curl)
-    command -v wget >/dev/null 2>&1 || missing_tools+=(wget)
-    command -v unzip >/dev/null 2>&1 || missing_tools+=(unzip)
+    for tool in "${required_tools[@]}"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            missing_tools+=("$tool")
+        fi
+    done
     
     if [[ ${#missing_tools[@]} -eq 0 ]]; then
         log_success "All additional tools are present"
@@ -161,62 +166,94 @@ install_additional_tools() {
     
     log_info "Installing missing tools: ${missing_tools[*]}"
     
-    # Check if we can install tools (requires root)
+    # Determine package manager and install command
+    local install_cmd=""
+    if command -v apt-get >/dev/null 2>&1; then
+        install_cmd="apt-get update && apt-get install -y"
+    elif command -v yum >/dev/null 2>&1; then
+        install_cmd="yum install -y"
+    elif command -v apk >/dev/null 2>&1; then
+        install_cmd="apk add"
+    else
+        log_error "No supported package manager found (apt-get, yum, apk)"
+        log_error "Please install manually: ${missing_tools[*]}"
+        return 1
+    fi
+    
+    # Check if we can install (need root or sudo)
     if [[ $EUID -ne 0 ]] && ! command -v sudo >/dev/null 2>&1; then
-        log_warning "Cannot install tools without root privileges. 
-        Please install manually: ${missing_tools[*]}"
+        log_warning "Cannot install tools without root privileges. Please install manually: ${missing_tools[*]}"
         return 1
     fi
     
     # Install the tools
-    if ! $install_cmd "${missing_tools[@]}" >/dev/null 2>&1; then
-        log_error "Failed to install tools. Please install manually: ${missing_tools[*]}"
-        return 1
+    if [[ $EUID -eq 0 ]]; then
+        if ! $install_cmd "${missing_tools[@]}" >/dev/null 2>&1; then
+            log_error "Failed to install tools. Please install manually: ${missing_tools[*]}"
+            return 1
+        fi
+    else
+        if ! sudo $install_cmd "${missing_tools[@]}" >/dev/null 2>&1; then
+            log_error "Failed to install tools with sudo. Please install manually: ${missing_tools[*]}"
+            return 1
+        fi
     fi
     
-    log_success "All tools installed successfully"
+    log_success "All additional tools installed successfully"
+    return 0
 }
 
-# Setup Synopsys Detect
+# Enhanced setup for Synopsys Detect
 setup_detect() {
     log_info "Setting up Detect..."
     
     mkdir -p "$TEMP_DIR/detect"
     cd "$TEMP_DIR/detect"
     
-    # Download Detect script with retries
-    local detect_url="https://detect.blackduck.com/detect10.sh"
+    # Download Detect script with retries and validation
+    local detect_url="https://detect.synopsys.com/detect7.sh"
     local retries=3
     local attempt=1
     
     while [[ $attempt -le $retries ]]; do
         log_info "Downloading Detect script (attempt $attempt/$retries)..."
-        if curl -L -f --connect-timeout 30 --max-time 120 -o detect.sh "$detect_url"; then
-            break
-        else
-            if [[ $attempt -eq $retries ]]; then
-                log_error "Failed to download Detect script after $retries attempts"
-                return 1
+        if curl -L -f --connect-timeout 30 --max-time 120 -o detect.sh "$detect_url" 2>/dev/null; then
+            # Verify the download
+            if [[ -f "detect.sh" ]] && [[ -s "detect.sh" ]] && head -1 detect.sh | grep -q "#!/bin/bash"; then
+                break
+            else
+                log_warning "Downloaded file appears corrupted, retrying..."
+                rm -f detect.sh 2>/dev/null || true
             fi
-            log_warning "Download attempt $attempt failed, retrying..."
-            sleep 5
-            ((attempt++))
         fi
+        
+        if [[ $attempt -eq $retries ]]; then
+            log_error "Failed to download Detect script after $retries attempts"
+            log_error "URL attempted: $detect_url"
+            return 1
+        fi
+        
+        log_warning "Download attempt $attempt failed, retrying in 5 seconds..."
+        sleep 5
+        ((attempt++))
     done
     
     chmod +x detect.sh
     DETECT_SCRIPT="$TEMP_DIR/detect/detect.sh"
     
-    # Verify Java version
+    # Verify Java version for compatibility
     local java_version
     if java_version=$(java -version 2>&1 | head -n1 | cut -d'"' -f2 2>/dev/null); then
         log_success "Synopsys Detect setup complete (Java version: $java_version)"
+        log_debug "Detect script location: $DETECT_SCRIPT"
     else
         log_success "Synopsys Detect setup complete"
     fi
+    
+    return 0
 }
 
-# Function to authenticate with Black Duck and get Bearer token
+# Enhanced Black Duck authentication with bearer token management
 authenticate_blackduck() {
     local api_token="$1"
     local bd_url="$2"
@@ -247,8 +284,6 @@ authenticate_blackduck() {
     curl_args+=(-X POST)
     curl_args+=(-H "Authorization: token $api_token")
     curl_args+=(-H "Accept: application/vnd.blackducksoftware.user-4+json")
-    
-    # Add write output option to capture HTTP status
     curl_args+=(-w "%{http_code}")
     curl_args+=("$auth_url")
 
@@ -262,231 +297,228 @@ authenticate_blackduck() {
         response="${full_response%???}"
         
         if [[ "$http_status" == "200" ]]; then
-            # Extract Bearer token from response
-            local bearer_token
-            bearer_token=$(echo "$response" | jq -r '.bearerToken // empty' 2>/dev/null)
+            # Extract bearer token and expiration
+            if command -v jq >/dev/null 2>&1; then
+                BD_BEARER_TOKEN=$(echo "$response" | jq -r '.bearerToken // empty' 2>/dev/null)
+                BD_TOKEN_EXPIRES=$(echo "$response" | jq -r '.expiresInMilliseconds // empty' 2>/dev/null)
+            else
+                # Fallback parsing without jq
+                BD_BEARER_TOKEN=$(echo "$response" | grep -o '"bearerToken":"[^"]*"' | cut -d'"' -f4)
+                BD_TOKEN_EXPIRES=$(echo "$response" | grep -o '"expiresInMilliseconds":[0-9]*' | cut -d':' -f2)
+            fi
             
-            if [[ -n "$bearer_token" && "$bearer_token" != "null" ]]; then
-                BD_BEARER_TOKEN="$bearer_token"
-                
-                # Extract token expiration if available
-                local expires_at
-                expires_at=$(echo "$response" | jq -r '.expiresAt // empty' 2>/dev/null)
-                if [[ -n "$expires_at" && "$expires_at" != "null" ]]; then
-                    BD_TOKEN_EXPIRES="$expires_at"
-                fi
-                
+            if [[ -n "$BD_BEARER_TOKEN" ]]; then
                 log_success "Black Duck authentication successful"
+                log_debug "Bearer token obtained (expires in ${BD_TOKEN_EXPIRES:-unknown}ms)"
                 return 0
             else
                 log_error "Failed to extract Bearer token from response"
+                log_debug "Response: $response"
                 return 1
             fi
         else
             log_error "Authentication failed with HTTP status: $http_status"
-            if [[ -n "$response" ]]; then
-                log_debug "Response: $response"
-            fi
+            log_debug "Response: $response"
+            
+            # Provide specific guidance based on HTTP status
+            case "$http_status" in
+                401)
+                    log_error "Invalid or expired API token"
+                    ;;
+                403)
+                    log_error "Insufficient permissions - check user roles"
+                    ;;
+                404)
+                    log_error "Invalid Black Duck URL or API endpoint not found"
+                    ;;
+                *)
+                    log_error "Unexpected authentication failure"
+                    ;;
+            esac
             return 1
         fi
     else
-        log_error "Failed to connect to Black Duck authentication endpoint"
+        log_error "Failed to connect to Black Duck server"
+        log_error "Check network connectivity and server URL: $bd_url"
         return 1
     fi
 }
 
-# Validate Black Duck connection and authenticate
+# Enhanced Black Duck connection validation
 validate_blackduck_connection() {
     log_info "Validating Black Duck connection..."
-
-    # Test basic connectivity
-    local health_url="$BD_URL/api/current-version"
-    local curl_args=(-s --connect-timeout 10 --max-time 30)
     
-    if [[ "$TRUST_CERT" == "true" ]]; then
-        curl_args+=(--insecure)
-    fi
-    
-    curl_args+=(-w "%{http_code}")
-    curl_args+=("$health_url")
-
-    local full_response
-    local http_status
-    
-    if full_response=$(curl "${curl_args[@]}" 2>/dev/null); then
-        http_status="${full_response: -3}"
-        
-        if [[ "$http_status" == "200" ]]; then
-            log_success "Black Duck server is reachable"
-        else
-            log_warning "Black Duck server returned HTTP status: $http_status"
-        fi
-    else
+    # Basic connectivity test
+    local test_url="${BD_URL}/api/tokens/authenticate"
+    if ! curl -k -s --connect-timeout 10 --max-time 20 -I "$test_url" >/dev/null 2>&1; then
         log_error "Cannot reach Black Duck server at: $BD_URL"
+        log_error "Check network connectivity and server URL"
         return 1
     fi
-
-    # Authenticate and get Bearer token
+    
+    log_success "Black Duck server is reachable"
+    
+    # Authenticate and get bearer token
     if ! authenticate_blackduck "$BD_TOKEN" "$BD_URL" "$TRUST_CERT"; then
         log_error "Black Duck authentication failed"
         return 1
     fi
-
+    
     return 0
 }
 
-# Function to ensure Project Group exists
+# Function to validate target environment
+validate_target() {
+    log_info "Validating target environment..."
+    
+    # Check if target namespace exists and is accessible
+    if ! kubectl get namespace "$TARGET_NS" >/dev/null 2>&1; then
+        log_error "Cannot access target namespace: $TARGET_NS"
+        return 1
+    fi
+    
+    # Check if we can list pods with the given selector
+    local pod_count
+    pod_count=$(kubectl get pods -n "$TARGET_NS" -l "$LABEL_SELECTOR" --no-headers 2>/dev/null | wc -l)
+    
+    if [[ "$pod_count" -eq 0 ]]; then
+        log_error "No pods found matching criteria"
+        log_error "Namespace: $TARGET_NS"
+        log_error "Selector: $LABEL_SELECTOR"
+        return 1
+    fi
+    
+    log_success "Found $pod_count pods matching criteria"
+    log_success "Target validation passed"
+    return 0
+}
+
+# Enhanced function to ensure project group exists
 ensure_project_group() {
     local project_group_name="$1"
     
     if [[ -z "$project_group_name" ]]; then
-        log_error "Project Group name is required"
+        log_error "Project group name is required"
         return 1
     fi
-
-    log_info "Ensuring Project Group exists: $project_group_name"
-
-    # Encode project group name for URL
-    local encoded_name
-    encoded_name=$(url_encode "$project_group_name")
-
-    # Check if project group exists
-    local search_url="$BD_URL/api/project-groups?q=name:$encoded_name"
-    local curl_args=(-s --connect-timeout 30 --max-time 60)
     
+    log_info "Ensuring Project Group exists: $project_group_name"
+    
+    # Prepare curl arguments for API call
+    local curl_args=(-s --connect-timeout 30 --max-time 60)
     if [[ "$TRUST_CERT" == "true" ]]; then
         curl_args+=(--insecure)
     fi
     
+    # Check if project group already exists
+    local search_url="$BD_URL/api/project-groups?q=name:$project_group_name"
     curl_args+=(-H "Authorization: Bearer $BD_BEARER_TOKEN")
-    curl_args+=(-H "Accept: application/vnd.blackducksoftware.project-group-5+json")
+    curl_args+=(-H "Accept: application/vnd.blackducksoftware.project-group-4+json")
     curl_args+=("$search_url")
-
-    local response
-    if response=$(curl "${curl_args[@]}" 2>/dev/null); then
-        local total_count
-        total_count=$(echo "$response" | jq -r '.totalCount // 0' 2>/dev/null)
-        
-        if [[ "$total_count" -gt 0 ]]; then
-            log_success "Project Group '$project_group_name' already exists"
-            return 0
-        else
-            # Create project group
-            log_info "Creating Project Group: $project_group_name"
-            
-            local create_url="$BD_URL/api/project-groups"
-            local create_data
-            create_data=$(jq -n --arg name "$project_group_name" '{
-                name: $name,
-                description: "Created by BD SelfScan for container vulnerability scanning"
-            }')
-            
-            local create_args=(-s --connect-timeout 30 --max-time 60)
-            
-            if [[ "$TRUST_CERT" == "true" ]]; then
-                create_args+=(--insecure)
+    
+    local search_response
+    if search_response=$(curl "${curl_args[@]}" 2>/dev/null); then
+        # Check if project group exists (look for totalCount > 0 or items array)
+        local exists=false
+        if command -v jq >/dev/null 2>&1; then
+            local total_count
+            total_count=$(echo "$search_response" | jq -r '.totalCount // 0' 2>/dev/null)
+            if [[ "$total_count" -gt 0 ]]; then
+                exists=true
             fi
-            
-            create_args+=(-X POST)
-            create_args+=(-H "Authorization: Bearer $BD_BEARER_TOKEN")
-            create_args+=(-H "Content-Type: application/vnd.blackducksoftware.project-group-5+json")
-            create_args+=(-H "Accept: application/vnd.blackducksoftware.project-group-5+json")
-            create_args+=(-d "$create_data")
-            create_args+=("$create_url")
-            
-            if curl "${create_args[@]}" >/dev/null 2>&1; then
-                log_success "Project Group '$project_group_name' created successfully"
-                return 0
-            else
-                log_error "Failed to create Project Group '$project_group_name'"
-                return 1
+        else
+            # Fallback check without jq
+            if echo "$search_response" | grep -q "\"name\":\"$project_group_name\""; then
+                exists=true
             fi
         fi
+        
+        if [[ "$exists" == "true" ]]; then
+            log_success "Project Group '$project_group_name' already exists"
+            return 0
+        fi
+    fi
+    
+    # Create the project group
+    log_info "Creating Project Group: $project_group_name"
+    
+    local create_data="{\"name\":\"$project_group_name\",\"description\":\"Created by BD SelfScan for container vulnerability scanning\"}"
+    
+    curl_args=(-s --connect-timeout 30 --max-time 60)
+    if [[ "$TRUST_CERT" == "true" ]]; then
+        curl_args+=(--insecure)
+    fi
+    curl_args+=(-X POST)
+    curl_args+=(-H "Authorization: Bearer $BD_BEARER_TOKEN")
+    curl_args+=(-H "Content-Type: application/json")
+    curl_args+=(-H "Accept: application/vnd.blackducksoftware.project-group-4+json")
+    curl_args+=(-d "$create_data")
+    curl_args+=(-w "%{http_code}")
+    curl_args+=("$BD_URL/api/project-groups")
+    
+    local create_response
+    if create_response=$(curl "${curl_args[@]}" 2>/dev/null); then
+        local http_status="${create_response: -3}"
+        
+        if [[ "$http_status" == "201" ]]; then
+            log_success "Project Group '$project_group_name' created successfully"
+            return 0
+        else
+            log_error "Failed to create project group (HTTP $http_status)"
+            log_debug "Response: ${create_response%???}"
+            return 1
+        fi
     else
-        log_error "Failed to query Project Groups from Black Duck"
+        log_error "Failed to create project group - connection error"
         return 1
     fi
 }
 
-# Validate target namespace and labels
-validate_target() {
-    log_info "Validating target environment..."
-
-    # Check if namespace exists
-    if ! kubectl get namespace "$TARGET_NS" >/dev/null 2>&1; then
-        log_error "Target namespace '$TARGET_NS' does not exist"
-        log_info "Available namespaces:"
-        kubectl get namespaces --no-headers 2>/dev/null | head -10 | while read -r ns rest; do
-            log_info "  - $ns"
-        done
-        return 1
-    fi
-
-    # Check if we have permissions to list pods
-    if ! kubectl auth can-i get pods -n "$TARGET_NS" >/dev/null 2>&1; then
-        log_error "Insufficient permissions to list pods in namespace '$TARGET_NS'"
-        return 1
-    fi
-
-    # Check if any pods exist with the label selector
-    local pod_count
-    pod_count=$(kubectl get pods -n "$TARGET_NS" -l "$LABEL_SELECTOR" --no-headers 2>/dev/null | wc -l)
-
-    if [[ "$pod_count" -eq 0 ]]; then
-        log_warning "No pods found in namespace '$TARGET_NS' with labels '$LABEL_SELECTOR'"
-        log_info "Available pods in namespace '$TARGET_NS':"
-        kubectl get pods -n "$TARGET_NS" --no-headers 2>/dev/null | head -5 | while read -r line; do
-            log_info "  $line"
-        done
-        log_info "Consider checking your label selector or waiting for pods to be created"
-        return 1
-    fi
-
-    log_success "Found $pod_count pods matching criteria"
-    log_success "Target validation passed"
-}
-
-# Get container images from pods - IMPROVED VERSION
+# Enhanced function to discover container images
 get_container_images() {
     local namespace="$1"
     local label_selector="$2"
     
-    if [[ -z "$namespace" ]] || [[ -z "$label_selector" ]]; then
-        log_error "Namespace and label selector are required"
-        return 1
-    fi
-
     log_info "Discovering container images in namespace '$namespace' with selector '$label_selector'..."
-
-    # Get pods matching the label selector with better error handling
+    
+    # Get pods matching the criteria
     local pods_json
     if ! pods_json=$(kubectl get pods -n "$namespace" -l "$label_selector" -o json 2>/dev/null); then
-        log_error "Failed to get pods from namespace '$namespace'"
+        log_error "Failed to retrieve pods from namespace '$namespace'"
         return 1
     fi
-
+    
     # Check if any pods were found
     local pod_count
-    pod_count=$(echo "$pods_json" | jq '.items | length' 2>/dev/null || echo "0")
+    if command -v jq >/dev/null 2>&1; then
+        pod_count=$(echo "$pods_json" | jq '.items | length' 2>/dev/null || echo "0")
+    else
+        pod_count=$(echo "$pods_json" | grep -c '"kind":"Pod"' 2>/dev/null || echo "0")
+    fi
     
     if [[ "$pod_count" -eq 0 ]]; then
-        log_warning "No pods found in namespace '$namespace' with selector '$label_selector'"
+        log_error "No pods found matching the criteria"
         return 1
     fi
-
+    
     log_info "Found $pod_count pod(s), extracting container images..."
-
-    # Extract unique container images with improved logic
+    
+    # Extract unique container images
     local images
-    images=$(echo "$pods_json" | jq -r '
-        [.items[]? | 
-         (.spec.containers[]?, .spec.initContainers[]?) |
-         select(.image != null) |
-         .image] |
-        unique |
-        map(select(. | test("^[^\\s]+$"))) |  # Filter out invalid image names
-        sort |
-        .[]' 2>/dev/null)
+    if command -v jq >/dev/null 2>&1; then
+        images=$(echo "$pods_json" | jq -r '
+            [.items[]? | 
+             (.spec.containers[]?, .spec.initContainers[]?) |
+             select(.image != null) |
+             .image] |
+            unique |
+            map(select(. | test("^[^\\s]+$"))) |
+            sort |
+            .[]' 2>/dev/null)
+    else
+        # Fallback extraction without jq (less reliable)
+        images=$(echo "$pods_json" | grep -o '"image":"[^"]*"' | cut -d'"' -f4 | sort -u | grep -v '^$')
+    fi
 
     if [[ -z "$images" ]]; then
         log_warning "No valid container images found in the selected pods"
@@ -508,15 +540,18 @@ get_container_images() {
     return 0
 }
 
-# Helper function to extract project info from container image
+# ENHANCED: Intelligent project version extraction with override support and auto-detection
 extract_project_info() {
     local image="$1"
     local -n project_name_ref="$2"
     local -n project_version_ref="$3"
 
     if [[ -z "$image" ]]; then
+        log_error "Image parameter is required for project info extraction"
         return 1
     fi
+
+    log_debug "Extracting project info from image: $image"
 
     # Parse image name and tag/digest
     local image_without_registry image_name image_tag
@@ -534,24 +569,130 @@ extract_project_info() {
         image_name="${image_without_registry%@*}"
         image_tag="sha256-${image_without_registry##*@sha256:}"
         image_tag="${image_tag:0:12}"  # Truncate digest for readability
+        log_debug "Detected digest format: $image_tag"
     elif [[ "$image_without_registry" == *":"* ]]; then
         # Handle tag format
         image_name="${image_without_registry%:*}"
         image_tag="${image_without_registry##*:}"
+        log_debug "Detected tag format: $image_tag"
     else
         # No tag specified, use 'latest'
         image_name="$image_without_registry"
         image_tag="latest"
+        log_debug "No tag specified, defaulting to: latest"
     fi
 
-    # CORRECTED: Use APPLICATION_NAME from config + "(bd-selfscan)" instead of image name
+    # Use APPLICATION_NAME for project name (from configuration)
     project_name_ref="${APPLICATION_NAME} (bd-selfscan)"
-    project_version_ref="$image_tag"
-
+    
+    # ENHANCED: Version determination with override support and intelligent auto-detection
+    local calculated_version=""
+    local version_source=""
+    
+    # PRIORITY 1: Check for explicit configuration override
+    if [[ -n "${BD_PROJECT_VERSION_OVERRIDE:-}" ]]; then
+        calculated_version="$BD_PROJECT_VERSION_OVERRIDE"
+        version_source="configuration override"
+        log_info "Using explicit version from configuration: $calculated_version"
+    
+    # PRIORITY 2: Intelligent auto-detection from image tag
+    else
+        log_info "Auto-detecting version from image tag: '$image_tag'"
+        
+        # Strategy 1: Handle "latest" tag specifically (most common problem case)
+        if [[ "$image_tag" == "latest" ]]; then
+            calculated_version="$(date '+%Y.%m.%d')-latest"
+            version_source="latest tag conversion"
+            log_info "Converted 'latest' tag to date-based version: $calculated_version"
+        
+        # Strategy 2: Semantic versioning patterns (v1.2.3, 2.0.1-alpha, etc.)
+        elif [[ "$image_tag" =~ ^v?([0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9.-]+)?)$ ]]; then
+            calculated_version="${BASH_REMATCH[1]}"
+            version_source="semantic version extraction"
+            log_info "Extracted semantic version: $calculated_version"
+        
+        # Strategy 3: Date-based patterns (20250912, 2025-09-12, etc.)
+        elif [[ "$image_tag" =~ ^[0-9]{8}$ ]]; then
+            # YYYYMMDD format
+            calculated_version="$(echo "$image_tag" | sed 's/\([0-9][0-9][0-9][0-9]\)\([0-9][0-9]\)\([0-9][0-9]\)/\1.\2.\3/')"
+            version_source="date format conversion"
+            log_info "Converted date format to version: $calculated_version"
+        
+        # Strategy 4: Build ID patterns (6+ consecutive digits)
+        elif [[ "$image_tag" =~ ^[0-9]{6,}$ ]]; then
+            calculated_version="build-$image_tag"
+            version_source="build ID conversion"
+            log_info "Converted build ID to version: $calculated_version"
+        
+        # Strategy 5: Azure DevOps/CI build number patterns (common in corporate environments)
+        elif [[ "$image_tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            calculated_version="${BASH_REMATCH[1]}"
+            version_source="CI build number"
+            log_info "Detected CI build number: $calculated_version"
+        
+        # Strategy 6: Branch-based tags (main, develop, feature/xyz)
+        elif [[ "$image_tag" =~ ^(main|master|develop|development)$ ]]; then
+            calculated_version="$(date '+%Y.%m.%d')-$image_tag"
+            version_source="branch tag conversion"
+            log_info "Converted branch tag to date-based version: $calculated_version"
+        
+        # Strategy 7: Release candidate or pre-release patterns
+        elif [[ "$image_tag" =~ (rc|alpha|beta|snapshot) ]]; then
+            calculated_version="$(date '+%Y.%m.%d')-$image_tag"
+            version_source="pre-release tag conversion"
+            log_info "Converted pre-release tag: $calculated_version"
+        
+        # Strategy 8: Any other valid-looking tag (alphanumeric with reasonable length)
+        elif [[ "$image_tag" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]$ ]] && [[ ${#image_tag} -le 50 ]]; then
+            # Clean the tag for use in version
+            local clean_tag=$(echo "$image_tag" | sed 's/[^a-zA-Z0-9._-]/-/g' | sed 's/--*/-/g')
+            calculated_version="$(date '+%Y.%m.%d')-$clean_tag"
+            version_source="generic tag conversion"
+            log_info "Converted generic tag to date-based version: $calculated_version"
+        
+        # Strategy 9: Fallback for invalid or problematic tags
+        else
+            calculated_version="$(date '+%Y.%m.%d')-container"
+            version_source="fallback generation"
+            log_warning "Image tag '$image_tag' could not be parsed, using fallback: $calculated_version"
+        fi
+    fi
+    
+    # Final validation and sanitization
+    if [[ -z "$calculated_version" ]]; then
+        calculated_version="$(date '+%Y.%m.%d')-scan"
+        version_source="emergency fallback"
+        log_error "Version calculation failed, using emergency fallback: $calculated_version"
+    fi
+    
+    # Ensure version meets Black Duck requirements
+    # - Length: reasonable (not too long for Black Duck)
+    # - Characters: alphanumeric, dots, dashes, underscores only
+    # - Format: not empty, not just whitespace
+    if [[ ${#calculated_version} -gt 100 ]]; then
+        calculated_version="${calculated_version:0:100}"
+        log_warning "Version truncated to 100 characters: $calculated_version"
+    fi
+    
+    # Sanitize version string (allow only safe characters)
+    calculated_version=$(echo "$calculated_version" | sed 's/[^a-zA-Z0-9._-]/-/g' | sed 's/--*/-/g' | sed 's/^-\+\|-\+$//g')
+    
+    # Final empty check
+    if [[ -z "$calculated_version" ]] || [[ "$calculated_version" =~ ^[[:space:]]*$ ]]; then
+        calculated_version="$(date '+%Y.%m.%d')-default"
+        log_error "Version sanitization resulted in empty string, using default: $calculated_version"
+    fi
+    
+    project_version_ref="$calculated_version"
+    
+    log_success "Project version determined: $calculated_version (source: $version_source)"
+    log_info "Final project mapping: '$project_name_ref' -> '$calculated_version'"
+    log_debug "Image: $image -> Project: $project_name_ref, Version: $calculated_version"
+    
     return 0
 }
 
-# Enhanced scan_container_image function with CORRECTED TAR export
+# Enhanced container image scanning function with improved error handling
 scan_container_image() {
     local image="$1"
     local scan_start=$(date +%s)
@@ -565,7 +706,7 @@ scan_container_image() {
 
     # Validate image name format
     if [[ ! "$image" =~ ^[a-zA-Z0-9._/-]+:[a-zA-Z0-9._-]+$ ]] && [[ ! "$image" =~ ^[a-zA-Z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]; then
-        log_warning "Image '$image' may have invalid format, attempting scan anyway"
+        log_warning "Image '$image' may have non-standard format, attempting scan anyway"
     fi
 
     # Create unique temporary directory for this scan
@@ -576,40 +717,42 @@ scan_container_image() {
     local project_name project_version
     if ! extract_project_info "$image" project_name project_version; then
         log_error "Failed to extract project information from image: $image"
+        rm -rf "$scan_temp_dir" 2>/dev/null || true
         return 1
     fi
 
     log_info "Project: $project_name, Version: $project_version"
 
-    # CORRECTED: Export container image to TAR format (not directory)
-    local download_retries=3
-    local download_attempt=1
-    local download_success=false
+    # Export container image to TAR with retry logic
     local tar_file="$scan_temp_dir/image.tar"
+    local max_retries=3
+    local retry=1
+    local export_success=false
 
-    while [[ $download_attempt -le $download_retries ]]; do
-        log_info "Exporting container image to TAR (attempt $download_attempt/$download_retries)..."
+    while [[ $retry -le $max_retries ]] && [[ "$export_success" == "false" ]]; do
+        log_info "Exporting container image to TAR (attempt $retry/$max_retries)..."
         
-        # FIXED: Export to docker-archive (tar) format instead of dir format
-        if timeout "${SCAN_TIMEOUT:-1800}" skopeo copy "docker://$image" "docker-archive:$tar_file" 2>/dev/null; then
-            download_success=true
+        if skopeo copy "docker://$image" "docker-archive:$tar_file" 2>/dev/null; then
+            export_success=true
             break
         else
-            log_warning "Export attempt $download_attempt failed"
-            if [[ $download_attempt -lt $download_retries ]]; then
-                sleep $((download_attempt * 5))  # Exponential backoff
+            log_warning "Export attempt $retry failed"
+            if [[ $retry -lt $max_retries ]]; then
+                log_info "Retrying in 10 seconds..."
+                sleep 10
             fi
-            ((download_attempt++))
+            ((retry++))
         fi
     done
 
-    if [[ "$download_success" != "true" ]]; then
-        log_error "Failed to export image after $download_retries attempts: $image"
+    if [[ "$export_success" == "false" ]]; then
+        log_error "Failed to export container image after $max_retries attempts"
+        log_error "Image: $image"
         rm -rf "$scan_temp_dir" 2>/dev/null || true
         return 1
     fi
 
-    # Verify tar file was created and has reasonable size
+    # Verify TAR file was created successfully
     if [[ ! -f "$tar_file" ]]; then
         log_error "TAR file was not created: $tar_file"
         rm -rf "$scan_temp_dir" 2>/dev/null || true
@@ -619,7 +762,7 @@ scan_container_image() {
     local file_size=$(stat -f%z "$tar_file" 2>/dev/null || stat -c%s "$tar_file" 2>/dev/null || echo "unknown")
     log_info "Container image exported to TAR: $tar_file (size: $file_size bytes)"
 
-    # CORRECTED: Detect arguments based on working container scan script
+    # ENHANCED: Detect arguments with improved configuration
     local detect_args=(
         --blackduck.url="$BD_URL"
         --blackduck.api.token="$BD_TOKEN"                    
@@ -632,12 +775,15 @@ scan_container_image() {
         --detect.tools=CONTAINER_SCAN
         --detect.container.scan.file.path="$tar_file"        
         --logging.level.com.synopsys.integration=INFO
-        --detect.output.path="$scan_temp_dir/detect-output"  
+        --detect.output.path="$scan_temp_dir/detect-output"
+        --detect.timeout="$SCAN_TIMEOUT"
+        --detect.wait.for.results=true
     )
 
     # Add policy fail severities if configured
     if [[ -n "${POLICY_FAIL_SEVERITIES:-}" ]]; then
         detect_args+=(--detect.policy.check.fail.on.severities="$POLICY_FAIL_SEVERITIES")
+        log_debug "Policy fail severities: $POLICY_FAIL_SEVERITIES"
     fi
 
     # Execute the scan with timeout
@@ -679,6 +825,32 @@ scan_container_image() {
     return $scan_exit_code
 }
 
+# Enhanced version strategy reporting function
+report_version_strategy() {
+    log_section "=== Version Detection Strategy Report ==="
+    log_info "Application Name: ${APPLICATION_NAME:-N/A}"
+    log_info "Version Source: ${BD_VERSION_SOURCE:-unknown}"
+    
+    if [[ "${BD_VERSION_SOURCE:-}" == "config" ]]; then
+        log_info "Strategy: Explicit configuration override"
+        log_info "Configured Version: ${BD_PROJECT_VERSION_OVERRIDE:-N/A}"
+        log_info "Benefits: Consistent versioning across scans, aligns with project releases"
+    else
+        log_info "Strategy: Auto-detection from container image tags"
+        log_info "Benefits: Dynamic versioning, works with CI/CD pipelines"
+        log_info "Note: Consider adding 'projectVersion' to config for more control"
+    fi
+    
+    # Show examples of what different image tags would produce
+    log_info "Auto-detection examples for common image tag patterns:"
+    log_info "  webgoat/webgoat:latest -> $(date '+%Y.%m.%d')-latest"
+    log_info "  myapp:v2.1.3 -> 2.1.3"
+    log_info "  service:20250912 -> 2025.09.12"
+    log_info "  api:build-123456 -> build-123456"
+    log_info "  app:main -> $(date '+%Y.%m.%d')-main"
+    log_info "  tool:v1.0.0-rc1 -> 1.0.0-rc1"
+}
+
 # Cleanup function to reset global variables and clean temp files
 cleanup() {
     local exit_code=$?
@@ -686,12 +858,12 @@ cleanup() {
     log_info "Cleaning up..."
     
     # Clear sensitive global variables
-    unset BD_BEARER_TOKEN
-    unset BD_TOKEN_EXPIRES
+    unset BD_BEARER_TOKEN BD_TOKEN_EXPIRES BD_TOKEN 2>/dev/null || true
     
     # Clean up temporary files if TEMP_DIR is set
     if [[ -n "$TEMP_DIR" ]] && [[ -d "$TEMP_DIR" ]]; then
         rm -rf "$TEMP_DIR" 2>/dev/null || true
+        log_debug "Cleaned up temporary directory: $TEMP_DIR"
     fi
     
     # Final status report
@@ -710,38 +882,60 @@ cleanup() {
 # Set trap for cleanup
 trap cleanup EXIT INT TERM
 
-# Main scanning logic
+# Enhanced main scanning logic with comprehensive reporting
 main() {
     SCAN_START_TIME=$(date +%s)
 
-    log_section "=== BD SelfScan Container Scanner ==="
+    log_section "=== BD SelfScan Container Scanner v${SCRIPT_VERSION} ==="
     log_info "Application: $APPLICATION_NAME"
     log_info "Target Namespace: $TARGET_NS"
     log_info "Label Selector: $LABEL_SELECTOR"
     log_info "Project Group: $DESIRED_PROJECT_GROUP"
     log_info "Project Tier: $PROJECT_TIER"
+    log_info "Project Phase: $PROJECT_PHASE"
+    
+    # Show version strategy
+    report_version_strategy
 
     # Setup
     mkdir -p "$TEMP_DIR"
     log_debug "Working directory: $TEMP_DIR"
 
     # Check environment
-    check_env_vars || exit 1
+    if ! validate_environment; then
+        log_error "Environment validation failed"
+        exit 1
+    fi
 
     # Install additional tools
-    install_additional_tools || exit 1
+    if ! install_additional_tools; then
+        log_error "Tool installation failed"
+        exit 1
+    fi
 
     # Setup Detect
-    setup_detect || exit 1
+    if ! setup_detect; then
+        log_error "Detect setup failed"
+        exit 1
+    fi
 
     # Test Black Duck connection and authenticate
-    validate_blackduck_connection || exit 1
+    if ! validate_blackduck_connection; then
+        log_error "Black Duck connection validation failed"
+        exit 1
+    fi
 
     # Validate target
-    validate_target || exit 1
+    if ! validate_target; then
+        log_error "Target validation failed"
+        exit 1
+    fi
 
     # Ensure project group exists
-    ensure_project_group "$DESIRED_PROJECT_GROUP" || exit 1
+    if ! ensure_project_group "$DESIRED_PROJECT_GROUP"; then
+        log_error "Project group setup failed"
+        exit 1
+    fi
 
     # Get container images
     local images
@@ -755,8 +949,24 @@ main() {
     TOTAL_IMAGES=${#image_array[@]}
 
     log_info "Starting scan of $TOTAL_IMAGES container images..."
+    
+    # Show what version each image will use (preview)
+    if [[ "$DEBUG_ENABLED" == "true" ]] || [[ $TOTAL_IMAGES -le 5 ]]; then
+        log_section "=== Image Version Mapping Preview ==="
+        for image in "${image_array[@]}"; do
+            if [[ -n "$image" ]]; then
+                local preview_project_name preview_project_version
+                if extract_project_info "$image" preview_project_name preview_project_version; then
+                    log_info "Image: $image -> Version: $preview_project_version"
+                else
+                    log_warning "Image: $image -> Version extraction failed"
+                fi
+            fi
+        done
+    fi
 
     # Scan each image
+    log_section "=== Starting Container Scans ==="
     for image in "${image_array[@]}"; do
         if [[ -n "$image" ]]; then
             if scan_container_image "$image"; then
@@ -767,12 +977,22 @@ main() {
         fi
     done
 
-    # Summary
+    # Final summary
+    local total_time=$(($(date +%s) - SCAN_START_TIME))
     log_section "=== Scan Summary ==="
     log_info "Images processed: $TOTAL_IMAGES"
     log_info "Successful scans: $SUCCESSFUL_SCANS"
     log_info "Failed scans: $FAILED_SCANS"
+    log_info "Total scan time: ${total_time}s"
+    log_info "Version strategy used: ${BD_VERSION_SOURCE:-auto}"
+    
+    if [[ "${BD_VERSION_SOURCE:-}" == "config" ]]; then
+        log_info "All scans used configured version: ${BD_PROJECT_VERSION_OVERRIDE:-N/A}"
+    else
+        log_info "Versions were auto-detected from image tags"
+    fi
 
+    # Determine exit status
     if [[ $FAILED_SCANS -eq 0 && $SUCCESSFUL_SCANS -gt 0 ]]; then
         log_success "All container scans completed successfully!"
         exit 0
@@ -785,5 +1005,7 @@ main() {
     fi
 }
 
-# Run main function
-main "$@"
+# Script entry point
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

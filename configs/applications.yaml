@@ -9,6 +9,7 @@ applications:
     projectGroup: "OWASP WebGoat Security Training"  # Required field
     projectTier: 2  # Optional field
     projectPhase: "DEVELOPMENT"  # Required field
+    projectVersion: "v2025.3"  # Optional field
     scanOnDeploy: true # Optional field
     scanSchedule: "0 2 * * 0" # Weekly Sunday 2AM (Phase 2) # Optional field
     description: "OWASP WebGoat Official (webgoat/webgoat:latest) - deliberately vulnerable web application" # Optional field
@@ -20,6 +21,9 @@ applications:
 #   namespace: Kubernetes namespace where the application is deployed
 #   labelSelector: Kubernetes label selector to find pods (supports multiple labels)
 #   projectGroup: Black Duck Project Group name (will be created if it doesn't exist)
+#   projecctVersion: Explicit version override - takes precedence over auto-detection from image tags
+#                    If not specified, version will be auto-detected from container image tags
+#                    Examples: "v2025.3", "1.2.3-release", "2025.09.12-snapshot"
 #
 # Valid Black Duck Project Version Phases:
 # - PLANNING: Early development, requirements gathering

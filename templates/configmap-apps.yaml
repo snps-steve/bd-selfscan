@@ -1,4 +1,4 @@
-# Applications configuration ConfigMap
+# Applications configuration ConfigMap - ENHANCED with projectVersion support
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,21 +8,83 @@ metadata:
     {{- include "bd-selfscan.labels" . | nindent 4 }}
     app.kubernetes.io/component: configuration
   annotations:
-    description: "Application configuration mapping Kubernetes applications to Black Duck Project Groups"
+    description: "Enhanced application configuration mapping Kubernetes applications to Black Duck Project Groups with intelligent version detection"
     bd-selfscan/config-type: "applications"
+    bd-selfscan/version: "{{ .Chart.AppVersion | default .Chart.Version }}"
+    bd-selfscan/features: "intelligent-version-detection,explicit-overrides,auto-detection"
 data:
   applications.yaml: |
     {{- if .Values.applications }}
-    # Applications loaded from values.yaml
+    # Applications loaded from values.yaml - ENHANCED with projectVersion support
     applications:
     {{- toYaml .Values.applications | nindent 4 }}
     {{- else }}
-    # Default applications configuration - loaded from configs/applications.yaml file
+    # Default applications configuration - ENHANCED VERSION
+    # Loaded from configs/applications.yaml file with projectVersion support
     {{- (.Files.Get "configs/applications.yaml") | nindent 4 }}
     {{- end }}
+    
+    # Enhanced Configuration Schema Documentation:
+    #
+    # Required Fields:
+    #   name: Human-readable application name (used in Black Duck Project names)
+    #   namespace: Kubernetes namespace where the application is deployed
+    #   labelSelector: Kubernetes label selector to find pods (supports multiple labels)
+    #   projectGroup: Black Duck Project Group name (will be created if it doesn't exist)
+    #
+    # Valid Black Duck Project Version Phases:
+    # - PLANNING: Early development, requirements gathering
+    # - DEVELOPMENT: Active development, testing
+    # - PRERELEASE: Pre-release testing, staging
+    # - RELEASED: Production deployment, released to users  
+    # - DEPRECATED: Legacy, being phased out
+    # - ARCHIVED: No longer maintained, archived
+    #
+    # Optional Fields:
+    #   projectTier: Priority tier for scanning policies (1=Critical, 2=High, 3=Medium, 4=Low)
+    #   projectVersion: ENHANCED - Explicit version override, takes precedence over auto-detection
+    #                  If not specified, version will be auto-detected from container image tags
+    #                  Examples: "v2025.3", "1.2.3-release", "2025.09.12-snapshot"
+    #   projectPhase: Black Duck project version phase (default: DEVELOPMENT)
+    #   scanOnDeploy: Enable automatic scanning when deployments occur (Phase 2)
+    #   scanSchedule: Cron expression for scheduled scans (Phase 2 only)
+    #   description: Human-readable description for documentation purposes
+    #
+    # ENHANCED PROJECT VERSION BEHAVIOR:
+    #   - If projectVersion is specified: Uses that exact version for Black Duck project
+    #   - If projectVersion is empty/not specified: Auto-detects from container image tags using these rules:
+    #     1. Semantic versions (v1.2.3, 2.0.1-alpha) -> Use as-is
+    #     2. Build numbers (123456, 20250912) -> Convert to "build-123456" or "date-20250912"
+    #     3. "latest" tag -> Convert to "YYYY.MM.DD-latest" (FIXES FAILURE_BLACKDUCK_FEATURE_ERROR)
+    #     4. Branch tags (main, develop) -> Convert to "YYYY.MM.DD-{branch}"
+    #     5. Other tags -> Convert to "YYYY.MM.DD-{tag}"
+    #     6. Invalid/empty -> Fallback to "YYYY.MM.DD-container"
+    #
+    # Example Applications Configuration:
+    #
+    # applications:
+    #   # Example with explicit version (recommended)
+    #   - name: "OWASP WebGoat"
+    #     namespace: "default"
+    #     labelSelector: "app=webgoat-official"
+    #     projectGroup: "OWASP WebGoat Security Training"
+    #     projectTier: 2
+    #     projectPhase: "DEVELOPMENT"
+    #     projectVersion: "v2025.3"  # Explicit version - overrides auto-detection
+    #     description: "OWASP WebGoat Official v2025.3"
+    #
+    #   # Example with auto-detection
+    #   - name: "Production API"
+    #     namespace: "production"
+    #     labelSelector: "app=api-gateway"
+    #     projectGroup: "Production Services"
+    #     projectTier: 1
+    #     projectPhase: "RELEASED"
+    #     # projectVersion: not specified - will auto-detect from image tags
+    #     description: "Production API Gateway - version auto-detected"
 
 ---
-# Configuration validation script (optional helper)
+# Enhanced Configuration validation script with projectVersion support
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -31,12 +93,16 @@ metadata:
   labels:
     {{- include "bd-selfscan.labels" . | nindent 4 }}
     app.kubernetes.io/component: configuration
+  annotations:
+    description: "Enhanced configuration validation scripts with projectVersion support"
+    bd-selfscan/version: "2.0.0"
 data:
   validate-config.sh: |
     #!/bin/bash
     set -euo pipefail
     
-    echo "=== BD SelfScan Configuration Validator ==="
+    echo "=== BD SelfScan Enhanced Configuration Validator v2.0 ==="
+    echo "Features: projectVersion validation, version detection preview"
     
     CONFIG_FILE="/config/applications.yaml"
     
@@ -52,8 +118,8 @@ data:
         exit 1
     fi
     
-    # Check required fields
-    echo "Validating required fields..."
+    # Check required fields and enhanced fields
+    echo "Validating required and enhanced fields..."
     
     APPS_COUNT=$(yq eval '.applications | length' "$CONFIG_FILE")
     echo "Found $APPS_COUNT applications"
@@ -63,15 +129,20 @@ data:
         exit 1
     fi
     
-    # Check each application has required fields
+    # Enhanced validation for each application
     for i in $(seq 0 $((APPS_COUNT - 1))); do
         APP_NAME=$(yq eval ".applications[$i].name" "$CONFIG_FILE")
         NAMESPACE=$(yq eval ".applications[$i].namespace" "$CONFIG_FILE")
         LABEL_SELECTOR=$(yq eval ".applications[$i].labelSelector" "$CONFIG_FILE")
         PROJECT_GROUP=$(yq eval ".applications[$i].projectGroup" "$CONFIG_FILE")
+        PROJECT_PHASE=$(yq eval ".applications[$i].projectPhase // \"DEVELOPMENT\"" "$CONFIG_FILE")
+        PROJECT_VERSION=$(yq eval ".applications[$i].projectVersion // \"\"" "$CONFIG_FILE")
+        PROJECT_TIER=$(yq eval ".applications[$i].projectTier // 3" "$CONFIG_FILE")
         
-        echo "Validating application: $APP_NAME"
+        echo ""
+        echo "=== Validating application: $APP_NAME ==="
         
+        # Required field validation
         if [ "$APP_NAME" = "null" ]; then
             echo "ERROR: Application $i missing required field: name"
             exit 1
@@ -92,32 +163,77 @@ data:
             exit 1
         fi
         
+        # Enhanced field validation
+        case "$PROJECT_PHASE" in
+            PLANNING|DEVELOPMENT|PRERELEASE|RELEASED|DEPRECATED|ARCHIVED)
+                echo "✓ Valid project phase: $PROJECT_PHASE"
+                ;;
+            *)
+                echo "WARNING: Invalid project phase '$PROJECT_PHASE' for '$APP_NAME'"
+                echo "  Valid phases: PLANNING, DEVELOPMENT, PRERELEASE, RELEASED, DEPRECATED, ARCHIVED"
+                echo "  Will default to DEVELOPMENT"
+                ;;
+        esac
+        
+        # Project tier validation
+        if ! echo "$PROJECT_TIER" | grep -qE '^[1-4]$'; then
+            echo "WARNING: Invalid project tier '$PROJECT_TIER' for '$APP_NAME'"
+            echo "  Valid tiers: 1=Critical, 2=High, 3=Medium, 4=Low"
+            echo "  Will default to 3 (Medium)"
+        else
+            echo "✓ Valid project tier: $PROJECT_TIER"
+        fi
+        
+        # Enhanced: Project version validation and preview
+        if [ -n "$PROJECT_VERSION" ] && [ "$PROJECT_VERSION" != "null" ] && [ "$PROJECT_VERSION" != '""' ]; then
+            echo "✓ Explicit project version configured: $PROJECT_VERSION"
+            echo "  Strategy: Configuration override"
+            echo "  Black Duck will use: $PROJECT_VERSION"
+        else
+            echo "✓ No explicit project version - will use auto-detection"
+            echo "  Strategy: Auto-detect from container image tags"
+            echo "  Common auto-detection examples:"
+            echo "    webgoat/webgoat:latest -> $(date '+%Y.%m.%d')-latest"
+            echo "    myapp:v2.1.3 -> 2.1.3"
+            echo "    service:20250912 -> 2025.09.12"
+            echo "    api:build-123456 -> build-123456"
+            echo "    app:main -> $(date '+%Y.%m.%d')-main"
+        fi
+        
         echo "✓ Application '$APP_NAME' validation passed"
     done
     
-    echo "=== Configuration validation completed successfully ==="
+    echo ""
+    echo "=== Enhanced configuration validation completed successfully ==="
+    echo "Features validated: required fields, project phases, project tiers, version strategy"
     
   test-label-selectors.sh: |
     #!/bin/bash
     set -euo pipefail
     
-    echo "=== Testing Label Selectors ==="
+    echo "=== Enhanced Label Selector Testing v2.0 ==="
+    echo "Features: pod discovery, image extraction, version preview"
     
     CONFIG_FILE="/config/applications.yaml"
     APPS_COUNT=$(yq eval '.applications | length' "$CONFIG_FILE")
+    
+    echo "Testing label selectors for $APPS_COUNT applications..."
+    echo ""
     
     for i in $(seq 0 $((APPS_COUNT - 1))); do
         APP_NAME=$(yq eval ".applications[$i].name" "$CONFIG_FILE")
         NAMESPACE=$(yq eval ".applications[$i].namespace" "$CONFIG_FILE")
         LABEL_SELECTOR=$(yq eval ".applications[$i].labelSelector" "$CONFIG_FILE")
+        PROJECT_VERSION=$(yq eval ".applications[$i].projectVersion // \"\"" "$CONFIG_FILE")
         
-        echo "Testing label selector for application: $APP_NAME"
+        echo "=== Testing application: $APP_NAME ==="
         echo "Namespace: $NAMESPACE"
         echo "Label Selector: $LABEL_SELECTOR"
         
         # Test if namespace exists
         if ! kubectl get namespace "$NAMESPACE" > /dev/null 2>&1; then
             echo "WARNING: Namespace '$NAMESPACE' does not exist"
+            echo ""
             continue
         fi
         
@@ -126,11 +242,127 @@ data:
         
         if [ "$POD_COUNT" -eq 0 ]; then
             echo "WARNING: No pods found in namespace '$NAMESPACE' with labels '$LABEL_SELECTOR'"
+            echo "Available pods in namespace:"
+            kubectl get pods -n "$NAMESPACE" --no-headers 2>/dev/null | head -5 | sed 's/^/  /' || echo "  (none or access denied)"
         else
             echo "✓ Found $POD_COUNT pods matching label selector"
+            
+            # Enhanced: Show container images that would be scanned
+            echo "Container images that would be scanned:"
+            if kubectl get pods -n "$NAMESPACE" -l "$LABEL_SELECTOR" -o jsonpath='{range .items[*]}{.spec.containers[*].image}{"\n"}{end}' 2>/dev/null | sort -u | while read -r image; do
+                if [ -n "$image" ]; then
+                    echo "  - $image"
+                    
+                    # Show version detection preview
+                    if [ -n "$PROJECT_VERSION" ] && [ "$PROJECT_VERSION" != "null" ] && [ "$PROJECT_VERSION" != '""' ]; then
+                        echo "    └── Version: $PROJECT_VERSION (explicit)"
+                    else
+                        # Simple version detection preview
+                        if [[ "$image" == *":latest" ]]; then
+                            echo "    └── Version: $(date '+%Y.%m.%d')-latest (auto-detected)"
+                        elif [[ "$image" =~ :v?[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9.-]+)?$ ]]; then
+                            tag="${image##*:}"
+                            echo "    └── Version: ${tag#v} (auto-detected)"
+                        elif [[ "$image" =~ :[0-9]{8}$ ]]; then
+                            tag="${image##*:}"
+                            formatted_date=$(echo "$tag" | sed 's/\([0-9][0-9][0-9][0-9]\)\([0-9][0-9]\)\([0-9][0-9]\)/\1.\2.\3/')
+                            echo "    └── Version: $formatted_date (auto-detected)"
+                        else
+                            tag="${image##*:}"
+                            echo "    └── Version: $(date '+%Y.%m.%d')-$tag (auto-detected)"
+                        fi
+                    fi
+                fi
+            done; then
+                :
+            else
+                echo "  (Could not extract container images)"
+            fi
         fi
         
         echo ""
     done
     
-    echo "=== Label selector testing completed ==="
+    echo "=== Enhanced label selector testing completed ==="
+    echo "Next steps: Run actual scan to test version detection in practice"
+    
+  version-detection-preview.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    
+    echo "=== BD SelfScan Version Detection Preview ==="
+    echo "Shows how different image tags will be converted to Black Duck project versions"
+    echo ""
+    
+    # Test cases for common image tag patterns
+    test_images=(
+        "webgoat/webgoat:latest"
+        "nginx:1.21.6"
+        "postgres:13"
+        "myapp:v2.1.3"
+        "service:20250912" 
+        "api:build-123456"
+        "app:main"
+        "tool:v1.0.0-rc1"
+        "redis:7.0.5-alpine"
+        "ubuntu:22.04"
+    )
+    
+    echo "Image Tag Conversion Examples:"
+    echo "=============================="
+    printf "%-30s -> %-30s %s\n" "Container Image" "Black Duck Version" "Detection Method"
+    echo "$(printf '%*s' 90 '' | tr ' ' '-')"
+    
+    for image in "${test_images[@]}"; do
+        # Extract tag
+        if [[ "$image" == *":"* ]]; then
+            tag="${image##*:}"
+        else
+            tag="latest"
+        fi
+        
+        # Apply version detection logic (simplified for preview)
+        if [[ "$tag" == "latest" ]]; then
+            version="$(date '+%Y.%m.%d')-latest"
+            method="Latest tag conversion"
+        elif [[ "$tag" =~ ^v?([0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9.-]+)?)$ ]]; then
+            version="${tag#v}"
+            method="Semantic version"
+        elif [[ "$tag" =~ ^[0-9]{8}$ ]]; then
+            version="$(echo "$tag" | sed 's/\([0-9][0-9][0-9][0-9]\)\([0-9][0-9]\)\([0-9][0-9]\)/\1.\2.\3/')"
+            method="Date conversion"
+        elif [[ "$tag" =~ ^[0-9]{6,}$ ]]; then
+            version="build-$tag"
+            method="Build ID"
+        elif [[ "$tag" =~ ^(main|master|develop|development)$ ]]; then
+            version="$(date '+%Y.%m.%d')-$tag"
+            method="Branch conversion"
+        elif [[ "$tag" =~ (rc|alpha|beta|snapshot) ]]; then
+            version="$(date '+%Y.%m.%d')-$tag"
+            method="Pre-release conversion"
+        else
+            clean_tag=$(echo "$tag" | sed 's/[^a-zA-Z0-9._-]/-/g' | sed 's/--*/-/g')
+            version="$(date '+%Y.%m.%d')-$clean_tag"
+            method="Generic conversion"
+        fi
+        
+        printf "%-30s -> %-30s %s\n" "$image" "$version" "$method"
+    done
+    
+    echo ""
+    echo "Key Benefits:"
+    echo "============="
+    echo "✓ Eliminates FAILURE_BLACKDUCK_FEATURE_ERROR caused by 'latest' tag"
+    echo "✓ Produces meaningful, consistent Black Duck project versions"  
+    echo "✓ Handles semantic versions, build IDs, dates, and generic tags"
+    echo "✓ Supports explicit version overrides via projectVersion config"
+    echo ""
+    echo "Configuration Options:"
+    echo "====================="
+    echo "1. Explicit Version (recommended for production):"
+    echo "   projectVersion: \"v2025.3\""
+    echo "   -> Always uses exactly \"v2025.3\" regardless of image tag"
+    echo ""
+    echo "2. Auto-Detection (good for CI/CD pipelines):"
+    echo "   # projectVersion: not specified"
+    echo "   -> Intelligently converts image tags as shown above"

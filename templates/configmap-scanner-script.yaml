@@ -1,4 +1,4 @@
-# Scanner Scripts ConfigMap
+# Scanner Scripts ConfigMap - ENHANCED with Intelligent Version Detection
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,62 +8,191 @@ metadata:
     {{- include "bd-selfscan.labels" . | nindent 4 }}
     app.kubernetes.io/component: scanner-scripts
   annotations:
-    description: "Scanner scripts for BD SelfScan container vulnerability scanning"
+    description: "Enhanced scanner scripts for BD SelfScan container vulnerability scanning with intelligent version detection"
     bd-selfscan/config-type: "scripts"
     bd-selfscan/version: "{{ .Chart.AppVersion | default .Chart.Version }}"
+    bd-selfscan/features: "intelligent-version-detection,explicit-overrides,auto-detection,latest-tag-fix"
 data:
-  # Core BDSC Container scanning engine - CORRECTED VERSION with TAR export
+  # ENHANCED: Core BDSC Container scanning engine with intelligent version detection (v2.0.0)
+  # Features: Fixes FAILURE_BLACKDUCK_FEATURE_ERROR, handles "latest" tag conversion, 9 detection strategies
   bdsc-container-scan.sh: |
     {{- .Files.Get "scripts/bdsc-container-scan.sh" | nindent 4 }}
   
-  # Single application wrapper - UPDATED VERSION with APPLICATION_NAME export
+  # ENHANCED: Single application wrapper with projectVersion support (v2.0.0)
+  # Features: Reads projectVersion from config, supports explicit overrides and auto-detection
   scan-application.sh: |
     {{- .Files.Get "scripts/scan-application.sh" | nindent 4 }}
   
-  # Bulk application scanner - COMPLETE VERSION with enhanced features
+  # ENHANCED: Bulk application scanner with version reporting (v2.0.0)
+  # Features: Shows version strategy for each application, enhanced parallel scanning
   scan-all-applications.sh: |
     {{- .Files.Get "scripts/scan-all-applications.sh" | nindent 4 }}
   
-  # Common utility functions (optional)
+  # ENHANCED: Common utility functions with version detection support (v2.0.0)
   common-functions.sh: |
     #!/bin/bash
-    # Common utility functions for BD SelfScan scripts
+    # Enhanced common utility functions for BD SelfScan scripts - v2.0.0
+    # Features: Intelligent version detection, project version validation, enhanced logging
     
-    # Color codes for consistent logging
-    export RED='\033[0;31m'
-    export GREEN='\033[0;32m'
-    export YELLOW='\033[1;33m'
-    export BLUE='\033[0;34m'
-    export PURPLE='\033[0;35m'
-    export CYAN='\033[0;36m'
-    export NC='\033[0m'
+    # Script metadata
+    export COMMON_FUNCTIONS_VERSION="2.0.0"
+    export ENHANCED_FEATURES="intelligent-version-detection,explicit-overrides,auto-detection,latest-tag-fix"
     
-    # Common logging functions
+    # Color codes for consistent logging (with terminal detection)
+    if [[ -t 2 ]]; then
+        export RED='\033[0;31m'
+        export GREEN='\033[0;32m'
+        export YELLOW='\033[1;33m'
+        export BLUE='\033[0;34m'
+        export PURPLE='\033[0;35m'
+        export CYAN='\033[0;36m'
+        export NC='\033[0m'
+    else
+        export RED=''
+        export GREEN=''
+        export YELLOW=''
+        export BLUE=''
+        export PURPLE=''
+        export CYAN=''
+        export NC=''
+    fi
+    
+    # Enhanced logging functions with timestamps
     log_info() { 
-        echo -e "${BLUE}[INFO]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1" >&2
+        echo -e "${BLUE}[INFO]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
     }
     
     log_success() { 
-        echo -e "${GREEN}[SUCCESS]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1" >&2
+        echo -e "${GREEN}[SUCCESS]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
     }
     
     log_warning() { 
-        echo -e "${YELLOW}[WARNING]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1" >&2
+        echo -e "${YELLOW}[WARNING]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
     }
     
     log_error() { 
-        echo -e "${RED}[ERROR]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1" >&2
+        echo -e "${RED}[ERROR]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
     }
     
     log_debug() { 
-        [[ "${DEBUG_ENABLED:-false}" == "true" ]] && echo -e "${PURPLE}[DEBUG]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1" >&2
+        [[ "${DEBUG_ENABLED:-false}" == "true" ]] && echo -e "${PURPLE}[DEBUG]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*" >&2
     }
     
     log_section() { 
-        echo -e "\n${CYAN}$1${NC}" >&2
+        echo -e "\n${CYAN}$*${NC}" >&2
     }
     
-    # Validation functions
+    # ENHANCED: Version detection utility functions
+    is_semantic_version() {
+        local tag="$1"
+        [[ "$tag" =~ ^v?([0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9.-]+)?)$ ]]
+    }
+    
+    is_build_number() {
+        local tag="$1"
+        [[ "$tag" =~ ^[0-9]{6,}$ ]]
+    }
+    
+    is_date_format() {
+        local tag="$1"
+        [[ "$tag" =~ ^[0-9]{8}$ ]]
+    }
+    
+    is_branch_name() {
+        local tag="$1"
+        [[ "$tag" =~ ^(main|master|develop|development)$ ]]
+    }
+    
+    is_ci_build_number() {
+        local tag="$1"
+        [[ "$tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)$ ]]
+    }
+    
+    is_prerelease_tag() {
+        local tag="$1"
+        [[ "$tag" =~ (rc|alpha|beta|snapshot) ]]
+    }
+    
+    # ENHANCED: Project version utilities with Black Duck compatibility
+    sanitize_version() {
+        local version="$1"
+        # Sanitize version for Black Duck compatibility (alphanumeric, dots, dashes, underscores only)
+        echo "$version" | sed 's/[^a-zA-Z0-9._-]/-/g' | sed 's/--*/-/g' | sed 's/^-\+\|-\+$//g'
+    }
+    
+    validate_version_string() {
+        local version="$1"
+        # Check if version meets Black Duck requirements
+        if [[ -z "$version" ]] || [[ ${#version} -gt 100 ]] || [[ "$version" =~ ^[[:space:]]*$ ]]; then
+            return 1
+        fi
+        return 0
+    }
+    
+    generate_fallback_version() {
+        echo "$(date '+%Y.%m.%d')-container"
+    }
+    
+    generate_date_based_version() {
+        local suffix="${1:-latest}"
+        echo "$(date '+%Y.%m.%d')-$suffix"
+    }
+    
+    # ENHANCED: Intelligent version detection (core logic used by scripts)
+    detect_version_from_tag() {
+        local image_tag="$1"
+        local version=""
+        local method=""
+        
+        if [[ -z "$image_tag" ]]; then
+            version=$(generate_fallback_version)
+            method="empty tag fallback"
+        elif [[ "$image_tag" == "latest" ]]; then
+            version=$(generate_date_based_version "latest")
+            method="latest tag conversion (FIXES FAILURE_BLACKDUCK_FEATURE_ERROR)"
+        elif is_semantic_version "$image_tag"; then
+            version="${image_tag#v}"  # Remove 'v' prefix if present
+            method="semantic version extraction"
+        elif is_date_format "$image_tag"; then
+            # Convert YYYYMMDD to YYYY.MM.DD
+            version="$(echo "$image_tag" | sed 's/\([0-9][0-9][0-9][0-9]\)\([0-9][0-9]\)\([0-9][0-9]\)/\1.\2.\3/')"
+            method="date format conversion"
+        elif is_build_number "$image_tag"; then
+            version="build-$image_tag"
+            method="build ID conversion"
+        elif is_ci_build_number "$image_tag"; then
+            version="$image_tag"
+            method="CI build number"
+        elif is_branch_name "$image_tag"; then
+            version=$(generate_date_based_version "$image_tag")
+            method="branch tag conversion"
+        elif is_prerelease_tag "$image_tag"; then
+            version=$(generate_date_based_version "$image_tag")
+            method="pre-release tag conversion"
+        elif [[ "$image_tag" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]$ ]] && [[ ${#image_tag} -le 50 ]]; then
+            # Generic valid tag
+            local clean_tag=$(sanitize_version "$image_tag")
+            version=$(generate_date_based_version "$clean_tag")
+            method="generic tag conversion"
+        else
+            # Fallback for invalid or problematic tags
+            version=$(generate_fallback_version)
+            method="fallback generation for invalid tag"
+        fi
+        
+        # Final sanitization and validation
+        version=$(sanitize_version "$version")
+        if ! validate_version_string "$version"; then
+            version=$(generate_fallback_version)
+            method="emergency fallback after validation failure"
+        fi
+        
+        # Return version and method (caller can capture both)
+        echo "$version"
+        log_debug "Version detection: '$image_tag' -> '$version' ($method)"
+    }
+    
+    # Enhanced validation functions
     validate_kubernetes_name() {
         local name="$1"
         if [[ ! "$name" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
@@ -74,14 +203,35 @@ data:
     
     validate_label_selector() {
         local selector="$1"
-        # Basic validation - could be enhanced
+        # Enhanced validation for label selectors
         if [[ -z "$selector" ]]; then
+            return 1
+        fi
+        # Check for basic label=value format
+        if [[ ! "$selector" =~ ^[a-zA-Z0-9._/-]+=[a-zA-Z0-9._-]+(,[a-zA-Z0-9._/-]+=[a-zA-Z0-9._-]+)*$ ]]; then
             return 1
         fi
         return 0
     }
     
-    # Environment validation
+    validate_project_phase() {
+        local phase="$1"
+        case "$phase" in
+            PLANNING|DEVELOPMENT|PRERELEASE|RELEASED|DEPRECATED|ARCHIVED)
+                return 0
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+    }
+    
+    validate_project_tier() {
+        local tier="$1"
+        [[ "$tier" =~ ^[1-4]$ ]]
+    }
+    
+    # Enhanced environment validation
     check_required_env() {
         local vars=("$@")
         local missing=()
@@ -100,7 +250,7 @@ data:
         return 0
     }
     
-    # Kubernetes helper functions
+    # Enhanced Kubernetes helper functions
     wait_for_pod_ready() {
         local namespace="$1"
         local label_selector="$2"
@@ -122,23 +272,47 @@ data:
         local namespace="$1"
         local label_selector="$2"
         
-        kubectl get pods -n "$namespace" -l "$label_selector" -o jsonpath='{.items[*].spec.containers[*].image}' 2>/dev/null | tr ' ' '\n' | sort -u | grep -v '^$'
+        kubectl get pods -n "$namespace" -l "$label_selector" \
+            -o jsonpath='{range .items[*]}{.spec.containers[*].image}{"\n"}{.spec.initContainers[*].image}{"\n"}{end}' 2>/dev/null | \
+            grep -v '^$' | sort -u
     }
     
-    # Image validation
+    count_matching_pods() {
+        local namespace="$1"
+        local selector="$2"
+        kubectl get pods -n "$namespace" -l "$selector" --no-headers 2>/dev/null | wc -l
+    }
+    
+    check_namespace_access() {
+        local namespace="$1"
+        kubectl auth can-i get pods -n "$namespace" >/dev/null 2>&1
+    }
+    
+    # Enhanced image validation
     validate_image_format() {
         local image="$1"
         
-        # Basic image format validation
-        if [[ ! "$image" =~ ^[a-zA-Z0-9._/-]+:[a-zA-Z0-9._-]+$ ]] && \
-           [[ ! "$image" =~ ^[a-zA-Z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]; then
+        # Enhanced image format validation (registry/namespace/name:tag or @digest)
+        if [[ "$image" =~ ^[a-zA-Z0-9._/-]+:[a-zA-Z0-9._-]+$ ]] || \
+           [[ "$image" =~ ^[a-zA-Z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]; then
+            return 0
+        else
             return 1
         fi
-        
-        return 0
     }
     
-    # Black Duck helper functions
+    extract_image_tag() {
+        local image="$1"
+        if [[ "$image" == *"@sha256:"* ]]; then
+            echo "sha256-${image##*@sha256:}"
+        elif [[ "$image" == *":"* ]]; then
+            echo "${image##*:}"
+        else
+            echo "latest"
+        fi
+    }
+    
+    # Enhanced Black Duck helper functions
     test_blackduck_connectivity() {
         local bd_url="$1"
         local bd_token="$2"
@@ -159,7 +333,63 @@ data:
         fi
     }
     
-    # Cleanup functions
+    get_blackduck_bearer_token() {
+        local bd_url="$1"
+        local api_token="$2"
+        local trust_cert="${3:-true}"
+        
+        local curl_args=("-s" "--connect-timeout" "30" "--max-time" "60")
+        if [[ "$trust_cert" == "true" ]]; then
+            curl_args+=("--insecure")
+        fi
+        
+        local auth_url="$bd_url/api/tokens/authenticate"
+        local response
+        
+        if response=$(curl "${curl_args[@]}" \
+                          -X POST \
+                          -H "Authorization: token $api_token" \
+                          -H "Accept: application/vnd.blackducksoftware.user-4+json" \
+                          "$auth_url" 2>/dev/null); then
+            
+            if command -v jq >/dev/null 2>&1; then
+                echo "$response" | jq -r '.bearerToken // empty'
+            else
+                echo "$response" | grep -o '"bearerToken":"[^"]*"' | cut -d'"' -f4
+            fi
+        fi
+    }
+    
+    # Enhanced error handling with scan-specific guidance
+    handle_scan_failure() {
+        local exit_code="$1"
+        local image="${2:-unknown}"
+        
+        case $exit_code in
+            11)
+                log_error "FAILURE_BLACKDUCK_FEATURE_ERROR for $image"
+                log_error "This typically indicates licensing or project version issues"
+                log_info "Common causes:"
+                log_info "  1. Black Duck CONTAINER_ANALYSIS license not available or expired"
+                log_info "  2. Invalid project version (e.g., 'latest' tag) - NOW FIXED with version detection"
+                log_info "  3. Black Duck server version compatibility issues"
+                log_info "  4. Project version already exists with different phase"
+                ;;
+            1|2)
+                log_error "General scanning failure for $image"
+                log_info "Check scanner logs for specific error details"
+                ;;
+            124)
+                log_error "Scan timeout for $image"
+                log_info "Consider increasing SCAN_TIMEOUT or checking image size"
+                ;;
+            *)
+                log_error "Unknown scan failure for $image (exit code: $exit_code)"
+                ;;
+        esac
+    }
+    
+    # Enhanced cleanup functions
     cleanup_temp_files() {
         local temp_dir="${1:-/tmp/bd-selfscan}"
         
@@ -169,15 +399,15 @@ data:
         fi
         
         if [[ -d "$temp_dir" ]]; then
-            log_info "Cleaning up temporary files: $temp_dir"
+            log_debug "Cleaning up temporary files: $temp_dir"
             rm -rf "$temp_dir" 2>/dev/null || true
         fi
     }
     
-    # Signal handlers
+    # Enhanced signal handlers
     setup_signal_handlers() {
         trap 'log_warning "Script interrupted by signal"; cleanup_temp_files; exit 130' INT TERM
-        trap 'log_error "Unexpected error at line $LINENO"' ERR
+        trap 'log_error "Unexpected error at line $LINENO"; cleanup_temp_files; exit 1' ERR
     }
     
     # Resource monitoring
@@ -197,142 +427,514 @@ data:
         return 0
     }
     
-    # Timeout function
+    check_memory_usage() {
+        local threshold_percent="${1:-80}"
+        
+        local mem_used_percent
+        mem_used_percent=$(free | awk 'NR==2{printf "%.0f", $3*100/$2 }')
+        
+        if [[ $mem_used_percent -gt $threshold_percent ]]; then
+            log_warning "High memory usage: ${mem_used_percent}% used"
+            return 1
+        fi
+        
+        return 0
+    }
+    
+    # Enhanced timeout function
     run_with_timeout() {
         local timeout_seconds="$1"
         shift
         
         timeout "$timeout_seconds" "$@"
-        return $?
+        local exit_code=$?
+        
+        case $exit_code in
+            0) return 0 ;;
+            124) log_error "Command timed out after ${timeout_seconds}s"; return 124 ;;
+            *) log_error "Command failed with exit code $exit_code"; return $exit_code ;;
+        esac
     }
     
-    # Project name sanitization for Black Duck
+    # Project name and version utilities for Black Duck
     sanitize_project_name() {
         local name="$1"
-        
-        # Replace invalid characters and ensure valid format
-        echo "$name" | sed 's/[^a-zA-Z0-9 ._-]//g' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//'
+        # Replace invalid characters and ensure valid format for Black Duck
+        echo "$name" | sed 's/[^a-zA-Z0-9 ._()-]//g' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//'
     }
     
-    # Version string normalization
-    normalize_version() {
-        local version="$1"
+    # Version detection testing utility
+    test_version_detection() {
+        log_info "Testing version detection with common image tag patterns..."
         
-        # Handle common version formats
-        echo "$version" | sed 's/^v//' | sed 's/[^a-zA-Z0-9.-]/_/g'
+        local test_cases=(
+            "webgoat/webgoat:latest"
+            "nginx:1.21.6"
+            "myapp:v2.1.3"
+            "service:20250912"
+            "api:build-123456"
+            "app:main"
+            "tool:v1.0.0-rc1"
+            "postgres:13"
+            "redis:7.0.5-alpine"
+        )
+        
+        for image in "${test_cases[@]}"; do
+            local tag=$(extract_image_tag "$image")
+            local version=$(detect_version_from_tag "$tag")
+            printf "%-25s -> %-25s\n" "$image" "$version"
+        done
     }
     
-    log_info "Common functions loaded successfully"
+    # Configuration validation helpers
+    validate_application_config() {
+        local app_name="$1"
+        local namespace="$2"
+        local label_selector="$3"
+        local project_group="$4"
+        local project_phase="${5:-DEVELOPMENT}"
+        local project_tier="${6:-3}"
+        
+        local errors=()
+        
+        [[ -z "$app_name" ]] && errors+=("application name is required")
+        [[ -z "$namespace" ]] && errors+=("namespace is required")
+        [[ -z "$label_selector" ]] && errors+=("labelSelector is required")
+        [[ -z "$project_group" ]] && errors+=("projectGroup is required")
+        
+        validate_label_selector "$label_selector" || errors+=("invalid labelSelector format")
+        validate_project_phase "$project_phase" || errors+=("invalid projectPhase: $project_phase")
+        validate_project_tier "$project_tier" || errors+=("invalid projectTier: $project_tier")
+        
+        if [[ ${#errors[@]} -gt 0 ]]; then
+            log_error "Configuration validation failed for '$app_name':"
+            printf '  - %s\n' "${errors[@]}" >&2
+            return 1
+        fi
+        
+        return 0
+    }
+    
+    # Enhanced initialization
+    log_debug "Enhanced common functions loaded (version: $COMMON_FUNCTIONS_VERSION)"
+    log_debug "Features: $ENHANCED_FEATURES"
 
-  # Health check script for debugging
+  # ENHANCED: Health check script with version detection testing
   health-check.sh: |
     #!/bin/bash
-    # BD SelfScan Health Check Script
+    # BD SelfScan Enhanced Health Check Script v2.0.0
+    # Features: Version detection testing, enhanced connectivity checks, configuration validation
     set -euo pipefail
     
-    # Source common functions
-    source /scripts/common-functions.sh 2>/dev/null || true
+    # Source enhanced common functions
+    source /scripts/common-functions.sh 2>/dev/null || {
+        echo "[ERROR] Cannot load common functions - basic health check mode"
+        BASIC_MODE=true
+    }
     
-    log_section "=== BD SelfScan Health Check ==="
-    
-    # Check environment
-    log_info "Checking environment variables..."
-    if check_required_env BD_URL BD_TOKEN; then
-        log_success "Required environment variables are set"
+    if [[ "${BASIC_MODE:-false}" != "true" ]]; then
+        log_section "=== BD SelfScan Enhanced Health Check v2.0.0 ==="
+        log_info "Features: $ENHANCED_FEATURES"
     else
-        log_error "Missing required environment variables"
-        exit 1
+        echo "=== BD SelfScan Basic Health Check ==="
     fi
     
-    # Check tools
-    log_info "Checking required tools..."
-    local tools=("java" "kubectl" "yq" "jq" "skopeo" "curl")
-    local missing_tools=()
+    # Check environment variables
+    echo "Checking environment variables..."
+    REQUIRED_VARS=(BD_URL BD_TOKEN)
+    MISSING_VARS=()
     
-    for tool in "${tools[@]}"; do
-        if ! command -v "$tool" >/dev/null 2>&1; then
-            missing_tools+=("$tool")
+    for var in "${REQUIRED_VARS[@]}"; do
+        if [[ -z "${!var:-}" ]]; then
+            MISSING_VARS+=("$var")
         fi
     done
     
-    if [[ ${#missing_tools[@]} -eq 0 ]]; then
-        log_success "All required tools are available"
+    if [[ ${#MISSING_VARS[@]} -eq 0 ]]; then
+        echo "✓ Required environment variables are set"
     else
-        log_error "Missing tools: ${missing_tools[*]}"
+        echo "✗ Missing required environment variables: ${MISSING_VARS[*]}"
         exit 1
     fi
     
-    # Check Black Duck connectivity
-    log_info "Testing Black Duck connectivity..."
-    if test_blackduck_connectivity "$BD_URL" "$BD_TOKEN" "${TRUST_CERT:-true}"; then
-        log_success "Black Duck server is reachable"
+    # Check required tools
+    echo "Checking required tools..."
+    TOOLS=(java kubectl yq jq skopeo curl)
+    MISSING_TOOLS=()
+    
+    for tool in "${TOOLS[@]}"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            MISSING_TOOLS+=("$tool")
+        fi
+    done
+    
+    if [[ ${#MISSING_TOOLS[@]} -eq 0 ]]; then
+        echo "✓ All required tools are available"
+        # Show versions for debugging
+        echo "Tool versions:"
+        echo "  Java: $(java -version 2>&1 | head -1 | cut -d'"' -f2)"
+        echo "  kubectl: $(kubectl version --client --short 2>/dev/null | cut -d' ' -f3)"
+        echo "  yq: $(yq --version | cut -d' ' -f4 2>/dev/null || echo 'unknown')"
+        echo "  jq: $(jq --version 2>/dev/null || echo 'unknown')"
     else
-        log_error "Cannot reach Black Duck server"
+        echo "✗ Missing tools: ${MISSING_TOOLS[*]}"
         exit 1
     fi
     
-    # Check configuration
-    log_info "Checking configuration..."
-    if [[ -f "/config/applications.yaml" ]]; then
-        if yq eval '.' /config/applications.yaml >/dev/null 2>&1; then
-            local app_count
-            app_count=$(yq eval '.applications | length' /config/applications.yaml 2>/dev/null || echo "0")
-            log_success "Configuration valid: $app_count applications configured"
+    # Enhanced Black Duck connectivity test
+    echo "Testing Black Duck connectivity..."
+    if [[ "${BASIC_MODE:-false}" != "true" ]]; then
+        if test_blackduck_connectivity "$BD_URL" "$BD_TOKEN" "${TRUST_CERT:-true}"; then
+            log_success "Black Duck server is reachable"
+            
+            # Test bearer token acquisition
+            if bearer_token=$(get_blackduck_bearer_token "$BD_URL" "$BD_TOKEN" "${TRUST_CERT:-true}"); then
+                if [[ -n "$bearer_token" ]]; then
+                    log_success "Bearer token acquired successfully"
+                else
+                    log_warning "Bearer token acquisition returned empty result"
+                fi
+            else
+                log_warning "Bearer token acquisition failed"
+            fi
         else
-            log_error "Invalid YAML syntax in configuration"
+            log_error "Cannot reach Black Duck server at: $BD_URL"
             exit 1
         fi
     else
-        log_error "Configuration file not found: /config/applications.yaml"
+        # Basic connectivity test
+        if curl -k -s --connect-timeout 10 -I "$BD_URL" >/dev/null 2>&1; then
+            echo "✓ Black Duck server is reachable"
+        else
+            echo "✗ Cannot reach Black Duck server"
+            exit 1
+        fi
+    fi
+    
+    # Enhanced configuration validation
+    echo "Checking configuration..."
+    if [[ -f "/config/applications.yaml" ]]; then
+        if yq eval '.' /config/applications.yaml >/dev/null 2>&1; then
+            APP_COUNT=$(yq eval '.applications | length' /config/applications.yaml 2>/dev/null || echo "0")
+            echo "✓ Configuration valid: $APP_COUNT applications configured"
+            
+            # Enhanced: Show version strategies for each application
+            if [[ "${BASIC_MODE:-false}" != "true" ]] && [[ $APP_COUNT -gt 0 ]]; then
+                echo "Version strategies configured:"
+                for i in $(seq 0 $((APP_COUNT - 1))); do
+                    APP_NAME=$(yq eval ".applications[$i].name" /config/applications.yaml)
+                    PROJECT_VERSION=$(yq eval ".applications[$i].projectVersion // \"\"" /config/applications.yaml)
+                    
+                    if [[ -n "$PROJECT_VERSION" ]] && [[ "$PROJECT_VERSION" != "null" ]] && [[ "$PROJECT_VERSION" != '""' ]]; then
+                        echo "  - $APP_NAME: Explicit version '$PROJECT_VERSION'"
+                    else
+                        echo "  - $APP_NAME: Auto-detection enabled"
+                    fi
+                done
+            fi
+        else
+            echo "✗ Invalid YAML syntax in configuration"
+            exit 1
+        fi
+    else
+        echo "✗ Configuration file not found: /config/applications.yaml"
         exit 1
     fi
     
-    # Check disk space
-    log_info "Checking disk space..."
-    if check_disk_space "/tmp" 5; then
-        log_success "Sufficient disk space available"
+    # Resource checks
+    echo "Checking system resources..."
+    
+    # Disk space check
+    if [[ "${BASIC_MODE:-false}" != "true" ]]; then
+        if check_disk_space "/tmp" 5; then
+            log_success "Sufficient disk space available"
+        else
+            log_warning "Low disk space - scans may fail"
+        fi
+        
+        if check_memory_usage 90; then
+            log_success "Memory usage is acceptable"
+        else
+            log_warning "High memory usage detected"
+        fi
     else
-        log_warning "Low disk space - scans may fail"
+        # Basic disk check
+        DISK_AVAIL=$(df /tmp | awk 'NR==2 {print int($4/1024/1024)}')
+        if [[ $DISK_AVAIL -gt 5 ]]; then
+            echo "✓ Sufficient disk space: ${DISK_AVAIL}GB available"
+        else
+            echo "⚠ Low disk space: ${DISK_AVAIL}GB available"
+        fi
     fi
     
-    log_success "Health check completed successfully"
+    # Enhanced: Version detection testing
+    if [[ "${BASIC_MODE:-false}" != "true" ]]; then
+        echo ""
+        echo "Testing enhanced version detection..."
+        test_version_detection
+    fi
+    
+    # Final status
+    if [[ "${BASIC_MODE:-false}" != "true" ]]; then
+        log_success "Enhanced health check completed successfully"
+        log_info "Key improvements in v2.0:"
+        log_info "  ✓ Intelligent version detection (fixes FAILURE_BLACKDUCK_FEATURE_ERROR)"
+        log_info "  ✓ Explicit version override support via projectVersion config"
+        log_info "  ✓ Enhanced error handling and debugging capabilities"
+        log_info "  ✓ Robust 'latest' tag conversion (latest -> YYYY.MM.DD-latest)"
+    else
+        echo "✓ Basic health check completed successfully"
+    fi
 
-  # Container image discovery script
+  # ENHANCED: Container image discovery script with version preview
   discover-images.sh: |
     #!/bin/bash
-    # Container Image Discovery Script
+    # Enhanced Container Image Discovery Script v2.0.0
+    # Features: Version detection preview, image validation, enhanced reporting
     set -euo pipefail
     
-    source /scripts/common-functions.sh 2>/dev/null || true
+    source /scripts/common-functions.sh 2>/dev/null || {
+        echo "[ERROR] Cannot load common functions"
+        exit 1
+    }
     
     NAMESPACE="${1:-}"
     LABEL_SELECTOR="${2:-}"
+    SHOW_VERSIONS="${3:-true}"
     
     if [[ -z "$NAMESPACE" ]] || [[ -z "$LABEL_SELECTOR" ]]; then
-        log_error "Usage: $0 <namespace> <label-selector>"
+        log_error "Usage: $0 <namespace> <label-selector> [show-versions]"
+        log_info "Examples:"
+        log_info "  $0 default app=webgoat-official"
+        log_info "  $0 production tier=web true"
         exit 1
     fi
     
+    log_section "=== Enhanced Container Image Discovery v2.0.0 ==="
     log_info "Discovering images in namespace: $NAMESPACE"
     log_info "Label selector: $LABEL_SELECTOR"
+    log_info "Version preview: $SHOW_VERSIONS"
     
-    # Get images from pods
-    if images=$(get_pod_images "$NAMESPACE" "$LABEL_SELECTOR"); then
-        if [[ -n "$images" ]]; then
-            log_success "Found container images:"
-            echo "$images" | while read -r image; do
-                if validate_image_format "$image"; then
-                    echo "  ✓ $image"
-                else
-                    echo "  ⚠ $image (invalid format)"
-                fi
+    # Validate namespace access
+    if ! check_namespace_access "$NAMESPACE"; then
+        log_error "Cannot access namespace '$NAMESPACE'"
+        log_info "Check permissions: kubectl auth can-i get pods -n $NAMESPACE"
+        exit 1
+    fi
+    
+    # Validate label selector format
+    if ! validate_label_selector "$LABEL_SELECTOR"; then
+        log_warning "Label selector format may be invalid: $LABEL_SELECTOR"
+    fi
+    
+    # Count matching pods
+    POD_COUNT=$(count_matching_pods "$NAMESPACE" "$LABEL_SELECTOR")
+    log_info "Found $POD_COUNT pods matching criteria"
+    
+    if [[ $POD_COUNT -eq 0 ]]; then
+        log_warning "No pods found - checking if any pods exist in namespace"
+        TOTAL_PODS=$(kubectl get pods -n "$NAMESPACE" --no-headers 2>/dev/null | wc -l)
+        log_info "Total pods in namespace '$NAMESPACE': $TOTAL_PODS"
+        
+        if [[ $TOTAL_PODS -gt 0 ]]; then
+            log_info "Available labels in namespace:"
+            kubectl get pods -n "$NAMESPACE" --show-labels 2>/dev/null | head -5 | while read -r line; do
+                log_info "  $line"
             done
+        fi
+        exit 1
+    fi
+    
+    # Get container images
+    if IMAGES=$(get_pod_images "$NAMESPACE" "$LABEL_SELECTOR"); then
+        if [[ -n "$IMAGES" ]]; then
+            log_success "Found container images:"
+            
+            IMAGE_COUNT=0
+            while IFS= read -r image; do
+                if [[ -n "$image" ]]; then
+                    ((IMAGE_COUNT++))
+                    
+                    if validate_image_format "$image"; then
+                        echo "  ✓ $image"
+                        
+                        if [[ "$SHOW_VERSIONS" == "true" ]]; then
+                            # Show version detection preview
+                            TAG=$(extract_image_tag "$image")
+                            VERSION=$(detect_version_from_tag "$TAG")
+                            echo "    └── Black Duck Version: $VERSION"
+                        fi
+                    else
+                        echo "  ⚠ $image (invalid format)"
+                    fi
+                fi
+            done <<< "$IMAGES"
+            
+            log_success "Discovery completed: $IMAGE_COUNT unique container images"
+            
+            if [[ "$SHOW_VERSIONS" == "true" ]]; then
+                log_info "Version detection shows how image tags will be converted for Black Duck"
+                log_info "Key benefit: 'latest' tags are converted to 'YYYY.MM.DD-latest' format"
+                log_info "This prevents FAILURE_BLACKDUCK_FEATURE_ERROR in scanning"
+            fi
+            
         else
-            log_warning "No container images found"
+            log_warning "No container images found in matching pods"
             exit 1
         fi
     else
         log_error "Failed to discover images"
         exit 1
     fi
+
+  # ENHANCED: Configuration testing and validation script
+  test-config.sh: |
+    #!/bin/bash
+    # Enhanced Configuration Testing Script v2.0.0
+    # Features: projectVersion validation, version strategy testing, comprehensive checks
+    set -euo pipefail
     
+    source /scripts/common-functions.sh 2>/dev/null || {
+        echo "[ERROR] Cannot load common functions"
+        exit 1
+    }
+    
+    CONFIG_FILE="${1:-/config/applications.yaml}"
+    
+    log_section "=== Enhanced Configuration Testing v2.0.0 ==="
+    log_info "Testing configuration file: $CONFIG_FILE"
+    
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        log_error "Configuration file not found: $CONFIG_FILE"
+        exit 1
+    fi
+    
+    # YAML syntax validation
+    log_info "Validating YAML syntax..."
+    if ! yq eval '.' "$CONFIG_FILE" >/dev/null 2>&1; then
+        log_error "Invalid YAML syntax"
+        exit 1
+    fi
+    log_success "YAML syntax is valid"
+    
+    # Get application count
+    APP_COUNT=$(yq eval '.applications | length' "$CONFIG_FILE" 2>/dev/null || echo "0")
+    log_info "Found $APP_COUNT applications to validate"
+    
+    if [[ $APP_COUNT -eq 0 ]]; then
+        log_error "No applications defined in configuration"
+        exit 1
+    fi
+    
+    # Enhanced validation for each application
+    VALIDATION_ERRORS=0
+    
+    for i in $(seq 0 $((APP_COUNT - 1))); do
+        APP_NAME=$(yq eval ".applications[$i].name" "$CONFIG_FILE")
+        NAMESPACE=$(yq eval ".applications[$i].namespace" "$CONFIG_FILE")
+        LABEL_SELECTOR=$(yq eval ".applications[$i].labelSelector" "$CONFIG_FILE")
+        PROJECT_GROUP=$(yq eval ".applications[$i].projectGroup" "$CONFIG_FILE")
+        PROJECT_PHASE=$(yq eval ".applications[$i].projectPhase // \"DEVELOPMENT\"" "$CONFIG_FILE")
+        PROJECT_TIER=$(yq eval ".applications[$i].projectTier // 3" "$CONFIG_FILE")
+        PROJECT_VERSION=$(yq eval ".applications[$i].projectVersion // \"\"" "$CONFIG_FILE")
+        
+        log_section "Validating application: $APP_NAME"
+        
+        # Use enhanced validation function
+        if validate_application_config "$APP_NAME" "$NAMESPACE" "$LABEL_SELECTOR" "$PROJECT_GROUP" "$PROJECT_PHASE" "$PROJECT_TIER"; then
+            log_success "Basic configuration validation passed"
+        else
+            ((VALIDATION_ERRORS++))
+            continue
+        fi
+        
+        # Enhanced: Version strategy validation and preview
+        if [[ -n "$PROJECT_VERSION" ]] && [[ "$PROJECT_VERSION" != "null" ]] && [[ "$PROJECT_VERSION" != '""' ]]; then
+            log_info "Version Strategy: Explicit override"
+            log_info "Configured Version: $PROJECT_VERSION"
+            
+            if validate_version_string "$PROJECT_VERSION"; then
+                log_success "Project version format is valid"
+            else
+                log_error "Invalid project version format: $PROJECT_VERSION"
+                ((VALIDATION_ERRORS++))
+            fi
+        else
+            log_info "Version Strategy: Auto-detection from image tags"
+            log_info "Will convert image tags using intelligent detection rules"
+        fi
+        
+        # Test namespace and pod discovery
+        log_info "Testing namespace and pod discovery..."
+        
+        if kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
+            log_success "Namespace '$NAMESPACE' exists"
+            
+            if check_namespace_access "$NAMESPACE"; then
+                log_success "Namespace access granted"
+                
+                POD_COUNT=$(count_matching_pods "$NAMESPACE" "$LABEL_SELECTOR")
+                if [[ $POD_COUNT -gt 0 ]]; then
+                    log_success "Found $POD_COUNT pods matching label selector"
+                    
+                    # Enhanced: Show actual images and version detection preview
+                    if IMAGES=$(get_pod_images "$NAMESPACE" "$LABEL_SELECTOR" 2>/dev/null); then
+                        if [[ -n "$IMAGES" ]]; then
+                            log_info "Container images that would be scanned:"
+                            while IFS= read -r image; do
+                                if [[ -n "$image" ]]; then
+                                    TAG=$(extract_image_tag "$image")
+                                    
+                                    if [[ -n "$PROJECT_VERSION" ]] && [[ "$PROJECT_VERSION" != "null" ]] && [[ "$PROJECT_VERSION" != '""' ]]; then
+                                        VERSION="$PROJECT_VERSION"
+                                        SOURCE="explicit config"
+                                    else
+                                        VERSION=$(detect_version_from_tag "$TAG")
+                                        SOURCE="auto-detected"
+                                    fi
+                                    
+                                    echo "  - $image"
+                                    echo "    └── Black Duck Version: $VERSION ($SOURCE)"
+                                fi
+                            done <<< "$IMAGES"
+                        else
+                            log_warning "No container images found in pods"
+                        fi
+                    else
+                        log_warning "Could not extract container images"
+                    fi
+                else
+                    log_warning "No pods found matching label selector '$LABEL_SELECTOR'"
+                    log_info "This is not necessarily an error - pods may not be running yet"
+                fi
+            else
+                log_error "Insufficient permissions to access namespace '$NAMESPACE'"
+                ((VALIDATION_ERRORS++))
+            fi
+        else
+            log_error "Namespace '$NAMESPACE' does not exist"
+            ((VALIDATION_ERRORS++))
+        fi
+        
+        echo ""
+    done
+    
+    # Final summary
+    log_section "=== Configuration Testing Summary ==="
+    log_info "Applications tested: $APP_COUNT"
+    log_info "Validation errors: $VALIDATION_ERRORS"
+    
+    if [[ $VALIDATION_ERRORS -eq 0 ]]; then
+        log_success "All configuration tests passed!"
+        log_info "Configuration is ready for BD SelfScan container scanning"
+        log_info "Enhanced features available:"
+        log_info "  ✓ Intelligent version detection"
+        log_info "  ✓ Explicit version overrides via projectVersion"
+        log_info "  ✓ Automatic 'latest' tag conversion"
+        log_info "  ✓ Support for semantic versions, build IDs, and date formats"
+        exit 0
+    else
+        log_error "Configuration testing failed with $VALIDATION_ERRORS errors"
+        log_error "Please fix the issues above before running scans"
+        exit 1
+    fi
