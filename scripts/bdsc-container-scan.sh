@@ -609,18 +609,20 @@ scan_container_image() {
     local file_size=$(stat -f%z "$tar_file" 2>/dev/null || stat -c%s "$tar_file" 2>/dev/null || echo "unknown")
     log_info "Container image exported to TAR: $tar_file (size: $file_size bytes)"
 
-    # CORRECTED: Prepare Detect arguments for BDSC Container Scan with TAR file
+    # CORRECTED: Detect arguments based on working container scan script
     local detect_args=(
         --blackduck.url="$BD_URL"
-        --blackduck.api.token="$BD_TOKEN"
+        --blackduck.api.token="$BD_TOKEN"                    
         --blackduck.trust.cert="$TRUST_CERT"
         --detect.project.name="$project_name"
         --detect.project.version.name="$project_version"
         --detect.project.group.name="$DESIRED_PROJECT_GROUP"
         --detect.project.tier="$PROJECT_TIER"
+        --detect.project.version.phase=DEVELOPMENT           
         --detect.tools=CONTAINER_SCAN
-        --detect.container.image="$tar_file"
+        --detect.container.scan.file.path="$tar_file"        
         --logging.level.com.synopsys.integration=INFO
+        --detect.output.path="$scan_temp_dir/detect-output"  
     )
 
     # Add policy fail severities if configured
