@@ -1,10 +1,11 @@
 # BD SelfScan Troubleshooting Guide
 
-This guide helps you diagnose and resolve issues with BD SelfScan container vulnerability scanning for both Phase 1 (On-Demand) and Phase 2 (Automated) deployments.
+This guide helps you diagnose and resolve issues with BD SelfScan container vulnerability scanning for both Phase 1 (On-Demand) and Phase 2 (Automated) deployments, including **per-application policy gating** and **enhanced diagnostic features**.
 
 ## 📋 Table of Contents
 
 - [Quick Diagnostics](#quick-diagnostics)
+- [Policy Gating Issues](#policy-gating-issues)
 - [Installation Issues](#installation-issues)
 - [Phase 1: On-Demand Scanning Issues](#phase-1-on-demand-scanning-issues)
 - [Phase 2: Automated Scanning Issues](#phase-2-automated-scanning-issues)
@@ -18,13 +19,13 @@ This guide helps you diagnose and resolve issues with BD SelfScan container vuln
 
 ## Quick Diagnostics
 
-### System Health Check
+### Enhanced System Health Check with Policy Validation
 
 ```bash
 #!/bin/bash
-# BD SelfScan Quick Health Check
+# BD SelfScan Enhanced Health Check with Policy Gating Support
 
-echo "=== BD SelfScan System Status ==="
+echo "=== BD SelfScan System Status (v2.1.0) ==="
 
 # Check namespace
 if kubectl get namespace bd-selfscan-system >/dev/null 2>&1; then
@@ -54,11 +55,45 @@ else
     echo "❌ Secrets: blackduck-creds missing"
 fi
 
+# NEW: Check policy configuration
+echo "🔒 Policy Configuration:"
+if kubectl get configmap bd-selfscan-applications -n bd-selfscan-system >/dev/null 2>&1; then
+    # Count applications with policy gating enabled
+    POLICY_ENABLED=$(kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml | grep -c "policyGating.*true" || echo "0")
+    DISCOVERY_MODE=$(kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml | grep -c "policyGating.*false" || echo "0")
+    TOTAL_APPS=$(kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml | grep -c "name:" || echo "0")
+    
+    echo "  📊 Total applications: $TOTAL_APPS"
+    echo "  🛡️  Policy enforcement enabled: $POLICY_ENABLED"
+    echo "  🔍 Discovery mode: $DISCOVERY_MODE"
+    
+    if [ "$POLICY_ENABLED" -gt 0 ]; then
+        echo "✅ Policy gating: CONFIGURED"
+    else
+        echo "ℹ️  Policy gating: All applications in discovery mode"
+    fi
+else
+    echo "❌ Application configuration: NOT FOUND"
+fi
+
 # Check Phase 2 controller (if enabled)
 if kubectl get deployment bd-selfscan-controller -n bd-selfscan-system >/dev/null 2>&1; then
     CONTROLLER_READY=$(kubectl get deployment bd-selfscan-controller -n bd-selfscan-system -o jsonpath='{.status.readyReplicas}')
     if [ "$CONTROLLER_READY" = "1" ]; then
         echo "✅ Phase 2: Controller running and ready"
+        
+        # NEW: Check policy metrics endpoint
+        if kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8080:8080 --timeout=5s >/dev/null 2>&1 &
+        then
+            PORTFORWARD_PID=$!
+            sleep 2
+            if curl -s http://localhost:8080/metrics | grep -q "bd_selfscan_policy"; then
+                echo "✅ Policy metrics: Available"
+            else
+                echo "⚠️  Policy metrics: Not found"
+            fi
+            kill $PORTFORWARD_PID 2>/dev/null
+        fi
     else
         echo "⚠️  Phase 2: Controller not ready (replicas: $CONTROLLER_READY)"
     fi
@@ -66,9 +101,18 @@ else
     echo "ℹ️  Phase 2: Controller not deployed (Phase 1 only)"
 fi
 
-# Check recent jobs
+# Check recent jobs with policy status
 JOB_COUNT=$(kubectl get jobs -n bd-selfscan-system --no-headers 2>/dev/null | wc -l)
 echo "📊 Jobs: $JOB_COUNT total jobs found"
+
+# NEW: Check for policy violations (exit code 9)
+POLICY_VIOLATIONS=$(kubectl get jobs -n bd-selfscan-system -o yaml 2>/dev/null | grep -c '"exitCode": 9' || echo "0")
+if [ "$POLICY_VIOLATIONS" -gt 0 ]; then
+    echo "🚨 Policy violations: $POLICY_VIOLATIONS jobs failed due to policy violations"
+    echo "   Use: kubectl get jobs -n bd-selfscan-system -o yaml | grep -B5 -A5 '\"exitCode\": 9'"
+else
+    echo "✅ Policy violations: No recent policy failures"
+fi
 
 # Check failed jobs
 FAILED_JOBS=$(kubectl get jobs -n bd-selfscan-system --no-headers 2>/dev/null | grep -c "0/1" || true)
@@ -87,36 +131,228 @@ echo "📊 Pods: $RUNNING_PODS running, $FAILED_PODS failed"
 echo "=== Health Check Complete ==="
 ```
 
-### Quick Commands
+### Enhanced Quick Commands with Policy Information
 
 ```bash
-# Check overall system health
+# Check overall system health with policy information
 kubectl get all -n bd-selfscan-system
 
-# Check recent job status
+# Check recent job status including policy violations
 kubectl get jobs -n bd-selfscan-system --sort-by=.metadata.creationTimestamp
 
-# Check pod logs (most recent)
-kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner --tail=50
+# Check for policy violations (exit code 9)
+kubectl get jobs -n bd-selfscan-system -o yaml | grep -B3 -A3 '"exitCode": 9'
 
-# Check controller logs (Phase 2)
-kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller --tail=50
+# Check pod logs with policy information
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner --tail=50 | grep -E "(Policy|BLOCKER|CRITICAL|violation)"
+
+# Check controller logs for policy processing (Phase 2)
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller --tail=50 | grep -i policy
+
+# Run comprehensive policy configuration test
+kubectl create job bd-policy-test --from=cronjob/bd-selfscan -n bd-selfscan-system
+kubectl exec -it job/bd-policy-test -n bd-selfscan-system -- /scripts/test-policy-gating.sh /config/applications.yaml preview
+kubectl delete job bd-policy-test -n bd-selfscan-system
 
 # Check resource usage
 kubectl top pods -n bd-selfscan-system 2>/dev/null || echo "Metrics server not available"
 
-# Check events
-kubectl get events -n bd-selfscan-system --sort-by=.metadata.creationTimestamp
+# Check events including policy-related events
+kubectl get events -n bd-selfscan-system --sort-by=.metadata.creationTimestamp | grep -E "(Policy|violation|gating)"
 ```
 
-## Installation Issues
+## Policy Gating Issues
 
-### Issue: Helm Chart Deployment Fails
+### Issue: Policy Configuration Not Loading
 
 **Symptoms:**
 ```
-Error: failed to create resource: unable to recognize "": no matches for kind "Job" in version "batch/v1"
-Error: INSTALLATION FAILED: unable to build kubernetes objects from release manifest
+[ERROR] Policy gating configuration invalid
+[WARNING] Using tier defaults for policy enforcement
+[ERROR] Invalid policy severity: INVALID_SEVERITY
+```
+
+**Diagnosis:**
+```bash
+# Test policy configuration syntax
+kubectl create job bd-policy-validation --from=cronjob/bd-selfscan -n bd-selfscan-system
+kubectl exec job/bd-policy-validation -n bd-selfscan-system -- /scripts/test-policy-gating.sh /config/applications.yaml preview
+
+# Check configuration syntax
+yq eval '.applications[] | select(.policyGating == true) | .name + ": " + (.policyGatingRisk // "tier-default")' configs/applications.yaml
+
+# Validate policy severities
+yq eval '.applications[].policyGatingRisk' configs/applications.yaml | grep -v null | sort -u
+```
+
+**Solutions:**
+
+1. **Fix Invalid Policy Severities:**
+   ```yaml
+   # Valid severities only
+   applications:
+     - name: "My App"
+       policyGating: true
+       policyGatingRisk: "BLOCKER,CRITICAL,HIGH"  # Valid
+       # NOT: "SEVERE,MAJOR" (invalid)
+   ```
+
+2. **Test Policy Configuration:**
+   ```bash
+   # Test all three modes
+   kubectl exec job/bd-policy-validation -- /scripts/test-policy-gating.sh /config/applications.yaml preview
+   kubectl exec job/bd-policy-validation -- /scripts/test-policy-gating.sh /config/applications.yaml dry-run
+   kubectl exec job/bd-policy-validation -- /scripts/test-policy-gating.sh /config/applications.yaml live
+   ```
+
+### Issue: Policy Violations Not Failing Builds (Exit Code 9)
+
+**Symptoms:**
+```
+Expected policy violations to fail scan but exit code is 0
+Policy gating appears enabled but builds never fail
+Discovery mode when enforcement mode expected
+```
+
+**Diagnosis:**
+```bash
+# Check policy enforcement configuration
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -A10 -B5 "Policy gating"
+
+# Verify application policy settings
+yq eval '.applications[] | select(.name == "My App") | {policyGating, policyGatingRisk, projectTier}' configs/applications.yaml
+
+# Check for override settings
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -i "override\|cli.*mode\|discovery"
+```
+
+**Solutions:**
+
+1. **Verify Policy Configuration:**
+   ```yaml
+   # Ensure policy gating is enabled and configured correctly
+   applications:
+     - name: "Critical App"
+       policyGating: true                          # Must be true
+       policyGatingRisk: "BLOCKER,CRITICAL"       # Explicit severities
+       # NOT policyGating: false (discovery mode)
+   ```
+
+2. **Check for CLI Overrides:**
+   ```bash
+   # CLI overrides bypass policy gating - check deployment
+   helm get values bd-selfscan | grep -A5 scanTarget
+   
+   # Avoid CLI overrides for policy enforcement
+   # Use: helm install bd-scan ./bd-selfscan  # Uses config
+   # NOT: helm install bd-scan ./bd-selfscan --set scanTarget="App" # Bypasses policy
+   ```
+
+3. **Test Policy Enforcement:**
+   ```bash
+   # Test with simulated high-severity vulnerabilities
+   kubectl exec job/bd-policy-test -- /scripts/test-policy-gating.sh /config/applications.yaml dry-run
+   ```
+
+### Issue: Unexpected Policy Violations
+
+**Symptoms:**
+```
+Scans failing with exit code 9 when not expected
+Too many policy violations blocking legitimate builds
+Policy enforcement seems too strict
+```
+
+**Diagnosis:**
+```bash
+# Check which severities are causing failures
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -A5 -B5 "Policy.*violation"
+
+# Review policy configuration
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -A10 "Policy.*severities"
+
+# Check Black Duck findings
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -E "(CRITICAL|HIGH|MEDIUM|LOW).*found"
+```
+
+**Solutions:**
+
+1. **Adjust Policy Severities:**
+   ```yaml
+   # Relax policy enforcement if too strict
+   applications:
+     - name: "My App"
+       policyGating: true
+       policyGatingRisk: "BLOCKER"  # Only blocker severity
+       # Was: "BLOCKER,CRITICAL,HIGH" (too strict)
+   ```
+
+2. **Use Tier-Based Defaults:**
+   ```yaml
+   # Use appropriate tier for application criticality
+   applications:
+     - name: "Internal Tool"
+       projectTier: 4      # Low priority - only BLOCKER severity
+       policyGating: true  # Uses tier 4 default
+   ```
+
+3. **Temporary Discovery Mode:**
+   ```yaml
+   # Temporarily disable enforcement while addressing findings
+   applications:
+     - name: "My App"
+       policyGating: false  # Discovery mode - never fails
+   ```
+
+### Issue: Policy Metrics Not Available
+
+**Symptoms:**
+```
+Policy violation metrics missing from Prometheus
+bd_selfscan_policy_violations_total not found
+Policy enforcement metrics not updating
+```
+
+**Diagnosis:**
+```bash
+# Check policy metrics endpoint
+kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8080:8080 &
+curl -s http://localhost:8080/metrics | grep -E "policy|violation"
+
+# Check monitoring configuration
+helm get values bd-selfscan | grep -A10 monitoring
+
+# Check controller logs for policy processing
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep -i policy
+```
+
+**Solutions:**
+
+1. **Enable Policy Metrics:**
+   ```bash
+   # Enable policy-specific metrics
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set monitoring.policyMetrics.enabled=true \
+     --set monitoring.policyMetrics.trackViolations=true
+   ```
+
+2. **Check Controller Configuration:**
+   ```bash
+   # Ensure controller has policy enforcement enabled
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set automated.controller.policyEnforcement.enabled=true \
+     --set automated.controller.policyEnforcement.trackViolations=true
+   ```
+
+## Installation Issues
+
+### Issue: Helm Chart Deployment Fails with Policy Features
+
+**Symptoms:**
+```
+Error: failed to create policy-related resources
+Template rendering errors for policy configuration
+Invalid policy configuration in values.yaml
 ```
 
 **Diagnosis:**
@@ -127,1214 +363,1027 @@ kubectl version --short
 # Check Helm version
 helm version --short
 
-# Validate chart syntax
+# Validate chart syntax with policy features
 helm lint ./bd-selfscan
 
-# Test dry-run
-helm install bd-selfscan ./bd-selfscan --dry-run --debug
+# Test dry-run with policy configuration
+helm install bd-selfscan ./bd-selfscan --dry-run --debug \
+  --set scanning.policyGating.enabled=true
 ```
 
 **Solutions:**
 
 1. **Kubernetes Version Compatibility:**
    ```bash
-   # Ensure Kubernetes 1.25+ for Job TTL and ephemeral storage
+   # Ensure Kubernetes 1.25+ for enhanced features
    kubectl version --short
    # Client Version: v1.27.0
    # Server Version: v1.27.0
    ```
 
-2. **Fix API Version Issues:**
+2. **Fix Policy Configuration Issues:**
    ```bash
-   # Update deprecated APIs in templates
-   # batch/v1beta1 → batch/v1
-   grep -r "batch/v1beta1" templates/ || echo "No deprecated APIs found"
+   # Check for policy-specific template errors
+   helm template bd-selfscan ./bd-selfscan --debug \
+     --set scanning.policyGating.enabled=true | grep -A5 -B5 policy
    ```
 
-3. **Check Resource Quotas:**
-   ```bash
-   # Verify namespace has sufficient quota
-   kubectl describe quota -n bd-selfscan-system
-   kubectl describe limitrange -n bd-selfscan-system
-   ```
-
-### Issue: Image Pull Failures
+### Issue: Enhanced Image Pull Failures (v2.1.0)
 
 **Symptoms:**
 ```
-Failed to pull image "ghcr.io/snps-steve/bd-selfscan/bd-selfscan:v1.1.0": rpc error: code = Unknown
-ImagePullBackOff
+Failed to pull image "ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest"
+ImagePullBackOff with policy-enhanced image
+Version mismatch for policy gating features
 ```
 
 **Diagnosis:**
 ```bash
-# Check image availability
-docker pull ghcr.io/snps-steve/bd-selfscan/bd-selfscan:v1.1.0
+# Check image availability for enhanced version
+docker pull ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest
+
+# Verify image supports policy gating (v2.1.0+)
+kubectl run test-image --image=ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest --rm -it --restart=Never -- /scripts/test-policy-gating.sh --version
 
 # Check image pull secrets
 kubectl get secrets -n bd-selfscan-system
-kubectl describe secret <image-pull-secret> -n bd-selfscan-system
-
-# Check pod events
-kubectl describe pod <pod-name> -n bd-selfscan-system
 ```
 
 **Solutions:**
 
-1. **Public Registry Access:**
+1. **Use Correct Image Version:**
    ```bash
-   # Test registry connectivity
-   curl -I https://ghcr.io/v2/
-   
-   # Check rate limiting
-   docker pull --quiet ghcr.io/snps-steve/bd-selfscan/bd-selfscan:v1.1.0
-   ```
-
-2. **Private Registry Credentials:**
-   ```bash
-   # Create registry secret
-   kubectl create secret docker-registry registry-creds \
-     --docker-server=your-registry.com \
-     --docker-username=username \
-     --docker-password=password \
-     --docker-email=email@company.com \
-     -n bd-selfscan-system
-   
-   # Update values.yaml
+   # Ensure using policy-capable image
    helm upgrade bd-selfscan ./bd-selfscan \
-     --set scanner.imagePullSecrets[0].name=registry-creds
+     --set scanner.image="ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest"
    ```
 
-### Issue: RBAC Permission Denied
-
-**Symptoms:**
-```
-Error from server (Forbidden): pods is forbidden: User "system:serviceaccount:bd-selfscan-system:bd-selfscan" cannot list resource "pods"
-```
-
-**Diagnosis:**
-```bash
-# Check service account permissions
-kubectl auth can-i list pods --as=system:serviceaccount:bd-selfscan-system:bd-selfscan
-kubectl auth can-i create jobs --as=system:serviceaccount:bd-selfscan-system:bd-selfscan
-
-# Check RBAC resources
-kubectl get clusterrole bd-selfscan -o yaml
-kubectl get clusterrolebinding bd-selfscan -o yaml
-```
-
-**Solutions:**
-
-1. **Recreate RBAC Resources:**
+2. **Verify Policy Scripts Present:**
    ```bash
-   # Delete and recreate RBAC
-   kubectl delete clusterrole bd-selfscan
-   kubectl delete clusterrolebinding bd-selfscan
-   
-   # Reinstall with RBAC
-   helm upgrade bd-selfscan ./bd-selfscan --set rbac.create=true
-   ```
-
-2. **Manual RBAC Creation:**
-   ```yaml
-   # Create minimal required permissions
-   apiVersion: rbac.authorization.k8s.io/v1
-   kind: ClusterRole
-   metadata:
-     name: bd-selfscan
-   rules:
-   - apiGroups: [""]
-     resources: ["pods"]
-     verbs: ["get", "list"]
-   - apiGroups: ["batch"]
-     resources: ["jobs"]
-     verbs: ["create", "get", "list", "delete"]
-   - apiGroups: ["apps"]
-     resources: ["deployments"]
-     verbs: ["get", "list", "watch"]
+   # Check if policy scripts are in image
+   kubectl run test-scripts --image=ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest --rm -it --restart=Never -- ls -la /scripts/ | grep policy
    ```
 
 ## Phase 1: On-Demand Scanning Issues
 
-### Issue: Scan Jobs Fail Immediately
+### Issue: Enhanced Scan Jobs Fail with Policy Processing
 
 **Symptoms:**
 ```
-Job failed with backoffLimit exceeded
-Pod status: Error or CrashLoopBackOff
+Job failed during policy evaluation phase
+Policy processing timeout errors
+Exit code 9 with policy violations
 ```
 
 **Diagnosis:**
 ```bash
-# Check job status
+# Check job status with policy information
 kubectl get jobs -n bd-selfscan-system -l app.kubernetes.io/component=scanner
 
-# Check pod logs
+# Check pod logs for policy processing
 JOB_NAME=$(kubectl get jobs -n bd-selfscan-system -l app.kubernetes.io/component=scanner --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}')
-kubectl logs -n bd-selfscan-system job/$JOB_NAME
+kubectl logs -n bd-selfscan-system job/$JOB_NAME | grep -A10 -B10 "Policy"
 
-# Check pod description
-POD_NAME=$(kubectl get pods -n bd-selfscan-system -l job-name=$JOB_NAME -o jsonpath='{.items[0].metadata.name}')
-kubectl describe pod $POD_NAME -n bd-selfscan-system
+# Check for policy evaluation timeouts
+kubectl logs -n bd-selfscan-system job/$JOB_NAME | grep -i "timeout.*policy"
 ```
 
-**Common Solutions:**
+**Solutions:**
 
-1. **Script Permission Issues:**
+1. **Increase Policy Processing Timeouts:**
    ```bash
-   # Check if scripts are executable in container
-   kubectl exec -it $POD_NAME -n bd-selfscan-system -- ls -la /scripts/
-   
-   # Fix: Ensure scripts use #!/bin/bash
-   # Scripts should start with: #!/bin/bash
-   ```
-
-2. **Missing Environment Variables:**
-   ```bash
-   # Check required variables are set
-   kubectl exec -it $POD_NAME -n bd-selfscan-system -- env | grep -E "(BD_URL|BD_TOKEN|TARGET_NS)"
-   
-   # Verify secret is mounted correctly
-   kubectl describe secret blackduck-creds -n bd-selfscan-system
-   ```
-
-3. **Resource Constraints:**
-   ```bash
-   # Check if pod was OOMKilled
-   kubectl describe pod $POD_NAME -n bd-selfscan-system | grep -i oom
-   
-   # Increase memory limits
+   # Increase policy evaluation timeout
    helm upgrade bd-selfscan ./bd-selfscan \
-     --set scanner.resources.limits.memory=16Gi
+     --set scanner.timeouts.policyEvaluation=600 \
+     --set scanning.policyProcessing.timeout=300
    ```
 
-### Issue: No Pods Found for Application
+2. **Check Policy Configuration Complexity:**
+   ```bash
+   # Simplify policy configuration for testing
+   # Reduce number of applications with complex policy settings
+   yq eval '.applications | length' configs/applications.yaml
+   ```
+
+3. **Debug Policy Processing:**
+   ```bash
+   # Enable policy-specific debugging
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set debug.policyDebug=true \
+     --set debug.enabled=true
+   ```
+
+### Issue: Version Detection Failures
+
+**Symptoms:**
+```
+[ERROR] Unable to detect version for image registry.company.com/app:latest
+[WARNING] Using fallback version detection strategy
+[ERROR] Invalid version format detected
+```
+
+**Diagnosis:**
+```bash
+# Test version detection manually
+kubectl create job bd-version-test --from=cronjob/bd-selfscan -n bd-selfscan-system
+kubectl exec job/bd-version-test -n bd-selfscan-system -- /scripts/discover-images.sh "namespace" "labelSelector"
+
+# Check image tags
+kubectl get pods -n target-namespace -o jsonpath='{range .items[*]}{.spec.containers[*].image}{"\n"}{end}' | sort -u
+
+# Check version detection logs
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -A5 -B5 "version.*detect"
+```
+
+**Solutions:**
+
+1. **Use Explicit Version Override:**
+   ```yaml
+   # Override version detection for problematic images
+   applications:
+     - name: "My App"
+       projectVersion: "v2.1.0"  # Explicit override
+   ```
+
+2. **Fix Image Tag Format:**
+   ```bash
+   # Use semantic versioning tags
+   # Good: app:v1.2.3, app:2024.08.15
+   # Avoid: app:latest, app:prod
+   ```
+
+3. **Debug Version Detection:**
+   ```bash
+   # Enable version detection debugging
+   kubectl exec job/bd-version-test -- DEBUG_ENABLED=true /scripts/discover-images.sh "namespace" "labelSelector"
+   ```
+
+### Issue: No Pods Found for Application with Policy Context
 
 **Symptoms:**
 ```
 [INFO] Target Namespace: myapp
 [INFO] Label Selector: app=myapp
+[INFO] Policy gating ENABLED for 'My App'
 [ERROR] No pods found matching label selector
 ```
 
 **Diagnosis:**
 ```bash
-# Test label selector manually
+# Test label selector with policy context
 NAMESPACE="myapp"
 LABEL_SELECTOR="app=myapp"
 kubectl get pods -n "$NAMESPACE" -l "$LABEL_SELECTOR"
 
-# Check if pods exist in namespace
-kubectl get pods -n "$NAMESPACE"
+# Check if namespace access allowed for policy enforcement
+kubectl auth can-i get pods -n "$NAMESPACE" --as=system:serviceaccount:bd-selfscan-system:bd-selfscan
 
-# Check application configuration
-kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml
+# Check policy-specific configuration
+kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml | grep -A10 -B5 "My App"
 ```
 
 **Solutions:**
 
-1. **Fix Label Selector:**
+1. **Fix Label Selector with Policy Validation:**
    ```yaml
-   # Update configs/applications.yaml
+   # Update configs/applications.yaml with correct labels
    applications:
      - name: "My Application"
        namespace: "myapp"
        labelSelector: "app.kubernetes.io/name=myapp"  # Use correct labels
        projectGroup: "My Project Group"
+       policyGating: true
+       policyGatingRisk: "BLOCKER,CRITICAL"
    ```
 
-2. **Verify Pod Labels:**
+2. **Test Policy Configuration:**
    ```bash
-   # Check actual pod labels
-   kubectl get pods -n myapp --show-labels
-   
-   # Use correct label format
-   kubectl get pods -n myapp -l "app.kubernetes.io/name=myapp"
-   ```
-
-### Issue: Container Image Download Failures
-
-**Symptoms:**
-```
-[ERROR] Failed to download image: registry.company.com/app:v1.0.0
-[ERROR] skopeo copy failed with exit code 1
-```
-
-**Diagnosis:**
-```bash
-# Test image access manually
-skopeo inspect docker://registry.company.com/app:v1.0.0
-
-# Check registry credentials
-kubectl get secret registry-creds -n bd-selfscan-system -o yaml
-
-# Test from scanner pod
-kubectl exec -it $POD_NAME -n bd-selfscan-system -- \
-  skopeo inspect docker://registry.company.com/app:v1.0.0
-```
-
-**Solutions:**
-
-1. **Registry Authentication:**
-   ```bash
-   # Create registry credentials
-   kubectl create secret docker-registry registry-creds \
-     --docker-server=registry.company.com \
-     --docker-username=username \
-     --docker-password=password \
-     -n bd-selfscan-system
-   
-   # Configure scanner to use credentials
-   helm upgrade bd-selfscan ./bd-selfscan \
-     --set scanner.imagePullSecrets[0].name=registry-creds
-   ```
-
-2. **Network Connectivity:**
-   ```bash
-   # Test network access from cluster
-   kubectl run test-pod --image=curlimages/curl --rm -it -- \
-     curl -I https://registry.company.com
-   ```
-
-3. **Increase Timeouts:**
-   ```bash
-   # Increase download timeouts for large images
-   helm upgrade bd-selfscan ./bd-selfscan \
-     --set scanning.imageDownloadTimeout=1800 \
-     --set scanning.imageDownloadRetries=5
+   # Verify policy configuration before scanning
+   kubectl exec job/bd-policy-test -- /scripts/test-policy-gating.sh /config/applications.yaml preview "My Application"
    ```
 
 ## Phase 2: Automated Scanning Issues
 
-### Issue: Controller Not Starting
+### Issue: Controller Not Processing Policy Configuration
 
 **Symptoms:**
 ```
-deployment "bd-selfscan-controller" not available
-CrashLoopBackOff on controller pod
+Controller running but policy enforcement not working
+Events triggering scans but policy settings ignored
+Policy metrics not updating
 ```
 
 **Diagnosis:**
 ```bash
-# Check controller deployment
-kubectl get deployment bd-selfscan-controller -n bd-selfscan-system
+# Check controller policy configuration loading
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep -A10 -B5 "policy.*config"
 
-# Check controller pod status
-kubectl get pods -n bd-selfscan-system -l app.kubernetes.io/component=controller
+# Check if policy enforcement is enabled
+helm get values bd-selfscan | grep -A10 policyEnforcement
 
-# Check controller logs
-kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller --tail=100
-
-# Check controller events
-kubectl describe deployment bd-selfscan-controller -n bd-selfscan-system
+# Test policy configuration reload
+kubectl rollout restart deployment/bd-selfscan-controller -n bd-selfscan-system
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep -i "policy.*reload"
 ```
 
 **Solutions:**
 
-1. **Configuration Issues:**
+1. **Enable Policy Enforcement in Controller:**
    ```bash
-   # Check if Phase 2 is enabled
-   helm get values bd-selfscan | grep -A 5 automated
-   
-   # Enable Phase 2
-   helm upgrade bd-selfscan ./bd-selfscan --set automated.enabled=true
-   ```
-
-2. **Resource Constraints:**
-   ```bash
-   # Check resource limits
-   kubectl describe pod <controller-pod> -n bd-selfscan-system | grep -A 10 Limits
-   
-   # Increase controller resources
+   # Enable policy features in Phase 2
    helm upgrade bd-selfscan ./bd-selfscan \
-     --set automated.controller.resources.limits.memory=1Gi \
-     --set automated.controller.resources.limits.cpu=500m
+     --set automated.controller.policyEnforcement.enabled=true \
+     --set automated.controller.policyEnforcement.validateOnCreate=true
    ```
 
-3. **Python Dependencies:**
+2. **Check Policy Configuration Access:**
    ```bash
-   # Check Python import errors in logs
-   kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep -i "importerror\|modulenotfounderror"
-   
-   # Verify container image version
-   kubectl get deployment bd-selfscan-controller -n bd-selfscan-system -o jsonpath='{.spec.template.spec.containers[0].image}'
+   # Verify controller can read policy configuration
+   kubectl auth can-i get configmaps -n bd-selfscan-system --as=system:serviceaccount:bd-selfscan-system:bd-selfscan
    ```
 
-### Issue: Controller Health Checks Failing
+### Issue: Policy-Aware Event Processing Failures
 
 **Symptoms:**
 ```
-Readiness probe failed: Get "http://10.244.0.10:8081/ready": connection refused
-Liveness probe failed: Get "http://10.244.0.10:8081/health": connection refused
+Events triggering scans but policy context lost
+Automated scans running in discovery mode despite enforcement configuration
+Policy violations not tracked in automated scans
 ```
 
 **Diagnosis:**
 ```bash
-# Check health endpoints directly
+# Check event processing with policy context
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep -E "(event.*policy|policy.*event)"
+
+# Check automated scan job creation with policy settings
+kubectl get jobs -n bd-selfscan-system -l triggered-by=deployment-event -o yaml | grep -A5 -B5 policy
+
+# Test automated scanning with policy
+kubectl create deployment test-policy-auto --image=nginx:latest -n default
+kubectl label deployment test-policy-auto app=test-policy-auto -n default
+```
+
+**Solutions:**
+
+1. **Update Application Configuration for Automation:**
+   ```yaml
+   # Ensure scanOnDeploy apps have policy configuration
+   applications:
+     - name: "Test Policy Auto"
+       namespace: "default"
+       labelSelector: "app=test-policy-auto"
+       projectGroup: "Test Group"
+       scanOnDeploy: true
+       policyGating: true
+       policyGatingRisk: "BLOCKER,CRITICAL"
+   ```
+
+2. **Check Policy Debouncing:**
+   ```bash
+   # Check if policy debouncing is preventing scans
+   kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep -i "debounce.*policy"
+   ```
+
+### Issue: Enhanced Controller Health Checks with Policy Support
+
+**Symptoms:**
+```
+Controller health checks failing with policy processing errors
+Policy evaluation endpoint not responding
+Policy metrics endpoint connection refused
+```
+
+**Diagnosis:**
+```bash
+# Check enhanced health endpoints
 kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8081:8081 &
 curl http://localhost:8081/health
 curl http://localhost:8081/ready
 
-# Check controller service
-kubectl get svc bd-selfscan-controller -n bd-selfscan-system
-kubectl describe svc bd-selfscan-controller -n bd-selfscan-system
-```
-
-**Solutions:**
-
-1. **Port Configuration:**
-   ```bash
-   # Verify health port configuration
-   helm upgrade bd-selfscan ./bd-selfscan \
-     --set automated.controller.healthPort=8081
-   ```
-
-2. **Security Context Issues:**
-   ```bash
-   # Check if security context prevents port binding
-   kubectl get pod <controller-pod> -n bd-selfscan-system -o yaml | grep -A 10 securityContext
-   ```
-
-3. **Network Policies:**
-   ```bash
-   # Check if network policies block health checks
-   kubectl get networkpolicy -n bd-selfscan-system
-   
-   # Temporarily disable for testing
-   helm upgrade bd-selfscan ./bd-selfscan \
-     --set networkPolicy.enabled=false
-   ```
-
-### Issue: Events Not Triggering Scans
-
-**Symptoms:**
-```
-Deployments are created/updated but no scan jobs are triggered
-Controller is running but not processing events
-```
-
-**Diagnosis:**
-```bash
-# Check controller event processing logs
-kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep -i event
-
-# Test with a deployment event
-kubectl create deployment nginx-test --image=nginx:latest -n default
-kubectl label deployment nginx-test app=nginx-test -n default
-
-# Check if application is configured for auto-scanning
-kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml | grep -A 10 nginx-test
-```
-
-**Solutions:**
-
-1. **Application Configuration:**
-   ```yaml
-   # Ensure scanOnDeploy is enabled in configs/applications.yaml
-   applications:
-     - name: "Test Application"
-       namespace: "default"
-       labelSelector: "app=nginx-test"
-       projectGroup: "Test Group"
-       scanOnDeploy: true  # Must be true for auto-scanning
-   ```
-
-2. **Controller Permissions:**
-   ```bash
-   # Verify controller can watch deployments
-   kubectl auth can-i watch deployments --as=system:serviceaccount:bd-selfscan-system:bd-selfscan
-   
-   # Check ClusterRole permissions
-   kubectl get clusterrole bd-selfscan -o yaml | grep -A 5 deployments
-   ```
-
-3. **Event Filtering:**
-   ```bash
-   # Check if events are being filtered out
-   kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep -i "filtered\|excluded\|ignored"
-   ```
-
-### Issue: Metrics Not Available
-
-**Symptoms:**
-```
-Prometheus metrics endpoint not accessible
-Metrics endpoint returns 404 or connection refused
-```
-
-**Diagnosis:**
-```bash
-# Test metrics endpoint
+# Check policy-specific metrics
 kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8080:8080 &
-curl http://localhost:8080/metrics
+curl http://localhost:8080/metrics | grep policy
 
-# Check metrics configuration
-helm get values bd-selfscan | grep -A 10 monitoring
-
-# Check service monitor (if using Prometheus Operator)
-kubectl get servicemonitor -n bd-selfscan-system
+# Check controller logs for policy health
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep -E "(health.*policy|policy.*health)"
 ```
 
 **Solutions:**
 
-1. **Enable Monitoring:**
+1. **Check Policy Health Dependencies:**
    ```bash
-   # Enable Prometheus metrics
+   # Verify policy configuration is valid for health checks
+   kubectl exec -it job/bd-policy-test -- /scripts/test-policy-gating.sh /config/applications.yaml preview
+   ```
+
+2. **Disable Policy Health Checks Temporarily:**
+   ```bash
+   # Disable policy features for debugging
    helm upgrade bd-selfscan ./bd-selfscan \
-     --set monitoring.prometheus.enabled=true \
-     --set monitoring.serviceMonitor.enabled=true
-   ```
-
-2. **Check Metrics Port:**
-   ```bash
-   # Verify metrics port configuration
-   kubectl get svc bd-selfscan-controller -n bd-selfscan-system -o yaml | grep -A 5 ports
-   ```
-
-3. **ServiceMonitor Configuration:**
-   ```yaml
-   # Check ServiceMonitor labels match Prometheus selector
-   kubectl get servicemonitor bd-selfscan -n bd-selfscan-system -o yaml
+     --set automated.controller.policyEnforcement.enabled=false
    ```
 
 ## Configuration Issues
 
-### Issue: Application Configuration Not Loading
+### Issue: Enhanced Application Configuration with Policy Settings
 
 **Symptoms:**
 ```
-[ERROR] Application 'My App' not found in configuration
-[WARNING] Configuration file could not be parsed
+[ERROR] Policy configuration validation failed
+[WARNING] Invalid combination of policy settings
+[ERROR] Tier-based policy defaults not applied
 ```
 
 **Diagnosis:**
 ```bash
-# Check ConfigMap exists and has data
-kubectl get configmap bd-selfscan-applications -n bd-selfscan-system
-kubectl describe configmap bd-selfscan-applications -n bd-selfscan-system
+# Validate enhanced configuration with policy support
+kubectl create job bd-config-validate --from=cronjob/bd-selfscan -n bd-selfscan-system
+kubectl exec job/bd-config-validate -n bd-selfscan-system -- /scripts/test-config.sh
 
-# Validate YAML syntax
-kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml | yq eval '.data."applications.yaml"' - | yq eval '.'
+# Check policy-specific configuration
+yq eval '.applications[] | select(.policyGating == true)' configs/applications.yaml
+
+# Test policy validation
+kubectl exec job/bd-config-validate -- /scripts/test-policy-gating.sh /config/applications.yaml preview
 ```
 
 **Solutions:**
 
-1. **Fix YAML Syntax:**
-   ```bash
-   # Validate local file
-   yq eval '.' configs/applications.yaml
-   
-   # Apply corrected configuration
-   kubectl create configmap bd-selfscan-applications \
-     --from-file=applications.yaml=configs/applications.yaml \
-     -n bd-selfscan-system \
-     --dry-run=client -o yaml | kubectl apply -f -
+1. **Fix Policy Configuration Syntax:**
+   ```yaml
+   # Correct policy configuration format
+   applications:
+     - name: "My App"
+       policyGating: true                    # boolean, not string
+       policyGatingRisk: "BLOCKER,CRITICAL" # comma-separated, no spaces
+       projectTier: 2                       # integer, not string
    ```
 
-2. **Trigger Configuration Reload (Phase 2):**
+2. **Validate Policy Combinations:**
    ```bash
-   # Restart controller to reload config
-   kubectl rollout restart deployment/bd-selfscan-controller -n bd-selfscan-system
-   
-   # Check reload logs
-   kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep -i "configuration\|reload"
+   # Test all policy combinations
+   kubectl exec job/bd-config-validate -- /scripts/test-policy-gating.sh /config/applications.yaml dry-run
    ```
 
-### Issue: Helm Values Not Applied
+### Issue: Enhanced Helm Values with Policy Features
 
 **Symptoms:**
 ```
-Configuration changes not taking effect
-Resources not updated after helm upgrade
+Policy-related values not taking effect
+Policy enforcement disabled despite configuration
+Enhanced features not available
 ```
 
 **Diagnosis:**
 ```bash
-# Check current values
-helm get values bd-selfscan
+# Check current values with policy settings
+helm get values bd-selfscan | grep -A20 policy
 
-# Compare with desired values
-helm diff upgrade bd-selfscan ./bd-selfscan --values custom-values.yaml
+# Check enhanced values structure
+helm get values bd-selfscan | grep -A10 scanning
 
-# Check deployment status
-kubectl rollout status deployment/bd-selfscan-controller -n bd-selfscan-system
+# Validate enhanced template rendering
+helm template bd-selfscan ./bd-selfscan --debug | grep -A10 -B10 policy
 ```
 
 **Solutions:**
 
-1. **Force Upgrade:**
+1. **Enable Enhanced Policy Features:**
    ```bash
-   # Force recreation of resources
-   helm upgrade bd-selfscan ./bd-selfscan --force
-   
-   # Or with specific values
+   # Enable comprehensive policy support
    helm upgrade bd-selfscan ./bd-selfscan \
-     --values custom-values.yaml \
-     --force
+     --set scanning.policyGating.enabled=true \
+     --set scanning.policyGating.defaultMode="tier-based" \
+     --set debug.policyDebug=false \
+     --set monitoring.policyMetrics.enabled=true
    ```
 
-2. **Check Template Rendering:**
+2. **Check Feature Flags:**
    ```bash
-   # Debug template rendering
-   helm template bd-selfscan ./bd-selfscan --debug --values custom-values.yaml
+   # Verify enhanced features are available
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set scanner.image="ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest"
    ```
 
 ## Black Duck Integration Issues
 
-### Issue: Black Duck API Connection Failures
+### Issue: Enhanced Black Duck API Integration with Policy Support
 
 **Symptoms:**
 ```
-[ERROR] Failed to connect to Black Duck API
-[ERROR] SSL certificate verification failed
-[ERROR] Authentication failed: Invalid token
+[ERROR] Policy evaluation API calls failing
+[ERROR] Policy violation data not uploading
+[ERROR] Black Duck policy API authentication failed
 ```
 
 **Diagnosis:**
 ```bash
-# Test Black Duck connectivity
+# Test enhanced Black Duck connectivity
 BD_URL=$(kubectl get secret blackduck-creds -n bd-selfscan-system -o jsonpath='{.data.url}' | base64 -d)
 BD_TOKEN=$(kubectl get secret blackduck-creds -n bd-selfscan-system -o jsonpath='{.data.token}' | base64 -d)
 
+# Test basic API access
 curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/current-user"
 
-# Check secret contents
-kubectl get secret blackduck-creds -n bd-selfscan-system -o yaml
+# Test policy API access (enhanced)
+curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/projects" | head -20
+
+# Check policy-specific API permissions
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -A5 -B5 "policy.*api"
 ```
 
 **Solutions:**
 
-1. **SSL Certificate Issues:**
+1. **Verify Enhanced API Permissions:**
    ```bash
-   # Enable certificate trust
+   # Ensure token has policy evaluation permissions
+   # Token should have: Project Creator, Policy Manager, or similar role
+   curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/users/current/roles"
+   ```
+
+2. **Enable Policy API Features:**
+   ```bash
+   # Enable enhanced Black Duck integration
    helm upgrade bd-selfscan ./bd-selfscan \
-     --set blackduck.trustCert=true
-   
-   # Or test connectivity
-   curl -k "$BD_URL/api/current-user"
+     --set blackduck.api.policyApi.enabled=true \
+     --set blackduck.api.policyApi.timeout=300
    ```
 
-2. **Token Authentication:**
-   ```bash
-   # Recreate secret with correct token
-   kubectl delete secret blackduck-creds -n bd-selfscan-system
-   kubectl create secret generic blackduck-creds \
-     --from-literal=url="https://your-blackduck-server.com" \
-     --from-literal=token="your-valid-api-token" \
-     -n bd-selfscan-system
-   ```
-
-3. **Network Connectivity:**
-   ```bash
-   # Test from scanner pod
-   kubectl run test-pod --image=curlimages/curl --rm -it -- \
-     curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/current-user"
-   ```
-
-### Issue: Project Group Creation Failures
+### Issue: Policy Evaluation Failures in Black Duck
 
 **Symptoms:**
 ```
-[ERROR] Failed to create Project Group 'My Project Group'
-[ERROR] Insufficient permissions to create project group
+[ERROR] Policy evaluation timeout
+[WARNING] Policy rules not found for project
+[ERROR] Policy violation assessment failed
 ```
 
 **Diagnosis:**
 ```bash
-# Check Black Duck user permissions
-curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/current-user"
+# Check policy evaluation logs
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -A10 -B10 "policy.*evaluat"
 
-# Test project group creation manually
-curl -k -X POST -H "Authorization: Bearer $BD_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Test Group","description":"Test group creation"}' \
-  "$BD_URL/api/project-groups"
+# Check Black Duck policy configuration
+# Use Black Duck UI to verify policies are configured for projects
+
+# Test policy evaluation timing
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -E "policy.*duration|evaluat.*took"
 ```
 
 **Solutions:**
 
-1. **Check Token Permissions:**
-   - Verify API token has "Project Creator" role in Black Duck
-   - Ensure token has not expired
-   - Check rate limiting
-
-2. **Manual Project Group Creation:**
+1. **Increase Policy Timeouts:**
    ```bash
-   # Create project group manually in Black Duck UI
-   # Then update configuration to use existing group
+   # Increase policy evaluation timeouts
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set blackduck.api.policyApi.timeout=600 \
+     --set scanning.policyProcessing.timeout=300
    ```
 
-### Issue: Scan Upload Failures
-
-**Symptoms:**
-```
-[ERROR] Failed to upload scan results to Black Duck
-[ERROR] Scan timeout after 30 minutes
-[ERROR] Detect execution failed
-```
-
-**Diagnosis:**
-```bash
-# Check Synopsys Detect logs
-kubectl logs -n bd-selfscan-system job/<job-name> | grep -A 20 -B 20 "DETECT"
-
-# Check Black Duck scan status
-# (Use Black Duck UI to check scan progress)
-
-# Check image size and complexity
-kubectl logs -n bd-selfscan-system job/<job-name> | grep -i "image size\|layer\|components"
-```
-
-**Solutions:**
-
-1. **Increase Timeouts:**
+2. **Optimize Policy Evaluation:**
    ```bash
-   # Increase scan timeout for large images
+   # Enable policy caching
    helm upgrade bd-selfscan ./bd-selfscan \
-     --set scanning.scanTimeout=3600 \
-     --set scanner.timeouts.scan=7200
-   ```
-
-2. **Optimize Detect Settings:**
-   ```bash
-   # Reduce scan scope
-   helm upgrade bd-selfscan ./bd-selfscan \
-     --set scanning.snippetMatching=false \
-     --set scanning.uploadSource=false
-   ```
-
-3. **Resource Allocation:**
-   ```bash
-   # Increase JVM memory for Detect
-   helm upgrade bd-selfscan ./bd-selfscan \
-     --set scanner.detectJavaOpts="-Xmx8g"
+     --set scanning.policyProcessing.cacheResults=true \
+     --set blackduck.scanning.policyAware.cacheEvaluations=true
    ```
 
 ## Performance Issues
 
-### Issue: Slow Scan Performance
+### Issue: Policy Processing Performance Impact
 
 **Symptoms:**
 ```
-Scans taking longer than expected
-High memory usage during scans
-Timeout errors for large containers
+Scans taking significantly longer with policy gating enabled
+High memory usage during policy evaluation
+Policy processing timeouts
 ```
 
 **Diagnosis:**
 ```bash
-# Check resource usage
-kubectl top pods -n bd-selfscan-system
+# Monitor resource usage during policy processing
+kubectl top pods -n bd-selfscan-system -l app.kubernetes.io/component=scanner
 
-# Check scan duration metrics (Phase 2)
-curl -s http://controller-service:8080/metrics | grep bd_selfscan_job_duration
+# Check policy processing duration
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -E "policy.*duration|evaluat.*took"
 
-# Check job logs for timing information
-kubectl logs -n bd-selfscan-system job/<job-name> | grep -E "\[INFO\].*took|duration|elapsed"
+# Check memory usage patterns
+kubectl describe pod <scanner-pod> -n bd-selfscan-system | grep -A10 "Limits\|Requests"
 ```
 
 **Solutions:**
 
-1. **Increase Resources:**
+1. **Optimize Policy Processing Resources:**
    ```bash
-   # Increase scanner resources
+   # Increase memory for policy processing
    helm upgrade bd-selfscan ./bd-selfscan \
-     --set scanner.resources.limits.memory=32Gi \
-     --set scanner.resources.limits.cpu=16 \
-     --set scanner.resources.limits.ephemeralStorage=200Gi
+     --set scanner.resources.limits.memory=20Gi \
+     --set scanner.resources.requests.memory=8Gi
    ```
 
-2. **Optimize Concurrency:**
+2. **Enable Policy Optimization:**
    ```bash
-   # Reduce concurrent operations for stability
+   # Enable policy processing optimizations
    helm upgrade bd-selfscan ./bd-selfscan \
-     --set scanning.maxConcurrentScans=3 \
-     --set scanning.maxConcurrentDownloads=2
+     --set scanning.policyProcessing.optimizedMode=true \
+     --set scanning.policyProcessing.parallelEvaluation=true \
+     --set scanning.policyProcessing.cacheSize="200Mi"
    ```
 
-3. **Node Selection:**
-   ```bash
-   # Use dedicated high-performance nodes
-   helm upgrade bd-selfscan ./bd-selfscan \
-     --set scanner.nodeSelector."node-type"="high-memory" \
-     --set scanner.tolerations[0].key="scanning-workload" \
-     --set scanner.tolerations[0].operator="Equal" \
-     --set scanner.tolerations[0].value="true" \
-     --set scanner.tolerations[0].effect="NoSchedule"
+3. **Reduce Policy Complexity:**
+   ```yaml
+   # Simplify policy configuration temporarily
+   applications:
+     - name: "My App"
+       policyGating: true
+       policyGatingRisk: "BLOCKER"  # Minimal policy for testing
    ```
 
-### Issue: Resource Exhaustion
+### Issue: Enhanced Resource Exhaustion with Policy Features
 
 **Symptoms:**
 ```
-OOMKilled pods
-Node running out of disk space
-Too many scan jobs running simultaneously
+OOMKilled pods during policy evaluation
+Node running out of disk space with policy cache
+Too many policy evaluations running simultaneously
 ```
 
 **Diagnosis:**
 ```bash
-# Check node resources
-kubectl describe nodes | grep -A 5 -B 5 "memory\|storage"
+# Check enhanced resource usage patterns
+kubectl describe nodes | grep -A10 -B5 "memory.*policy\|storage.*policy"
 
-# Check failed pods due to resources
-kubectl get pods -n bd-selfscan-system --field-selector=status.phase=Failed
-kubectl describe pod <failed-pod> -n bd-selfscan-system | grep -i oom
+# Check policy cache usage
+kubectl exec -it <scanner-pod> -n bd-selfscan-system -- df -h | grep -i cache
 
-# Check disk usage on nodes
-kubectl get pods -o wide -n bd-selfscan-system
+# Check concurrent policy evaluations
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller | grep -c "policy.*concurrent"
 ```
 
 **Solutions:**
 
-1. **Resource Limits:**
+1. **Tune Policy Processing Limits:**
    ```bash
-   # Set appropriate resource limits
+   # Limit concurrent policy evaluations
    helm upgrade bd-selfscan ./bd-selfscan \
-     --set scanner.resources.requests.memory=4Gi \
-     --set scanner.resources.limits.memory=16Gi \
-     --set scanner.resources.requests.ephemeralStorage=20Gi \
-     --set scanner.resources.limits.ephemeralStorage=100Gi
+     --set scanning.policyProcessing.maxConcurrentEvaluations=5 \
+     --set automated.controller.policyEnforcement.maxConcurrentEvaluations=10
    ```
 
-2. **Job Cleanup:**
+2. **Optimize Policy Cache:**
    ```bash
-   # Enable automatic job cleanup
+   # Configure appropriate cache sizes
    helm upgrade bd-selfscan ./bd-selfscan \
-     --set scanner.job.ttlSecondsAfterFinished=3600 \
-     --set scanner.job.cleanup.enabled=true \
-     --set scanner.job.cleanup.keepSuccessful=3 \
-     --set scanner.job.cleanup.keepFailed=5
-   ```
-
-3. **Manual Cleanup:**
-   ```bash
-   # Clean up old completed jobs
-   kubectl delete jobs -n bd-selfscan-system --field-selector=status.successful=1
-   
-   # Clean up old failed jobs (keep some for debugging)
-   kubectl get jobs -n bd-selfscan-system --field-selector=status.successful=0 --sort-by=.metadata.creationTimestamp | head -n -5 | awk '{print $1}' | xargs kubectl delete job -n bd-selfscan-system
+     --set scanning.policyProcessing.cacheSize="100Mi" \
+     --set automated.controller.policyProcessing.cacheSize="50Mi"
    ```
 
 ## Security and Permissions Issues
 
-### Issue: Security Context Failures
+### Issue: Enhanced Security Context with Policy Processing
 
 **Symptoms:**
 ```
-container has runAsNonRoot and image will run as root
-Operation not permitted errors during scanning
-Permission denied accessing container images
+Policy evaluation fails due to security constraints
+Permission denied during policy file operations
+Policy cache access denied
 ```
 
 **Diagnosis:**
 ```bash
-# Check pod security context
-kubectl get pod <scanner-pod> -n bd-selfscan-system -o yaml | grep -A 20 securityContext
+# Check enhanced security context
+kubectl get pod <scanner-pod> -n bd-selfscan-system -o yaml | grep -A30 securityContext
 
-# Check container capabilities
-kubectl describe pod <scanner-pod> -n bd-selfscan-system | grep -A 10 "Security Context"
+# Check policy file permissions
+kubectl exec -it <scanner-pod> -n bd-selfscan-system -- ls -la /scripts/ | grep policy
 
-# Test container operations
-kubectl exec -it <scanner-pod> -n bd-selfscan-system -- whoami
-kubectl exec -it <scanner-pod> -n bd-selfscan-system -- ls -la /var/run/
+# Test policy execution permissions
+kubectl exec -it <scanner-pod> -n bd-selfscan-system -- /scripts/test-policy-gating.sh --help
 ```
 
 **Solutions:**
 
-1. **Scanner Security Context (requires root):**
+1. **Verify Policy Script Permissions:**
+   ```bash
+   # Ensure policy scripts are executable
+   kubectl exec -it <scanner-pod> -n bd-selfscan-system -- chmod +x /scripts/test-policy-gating.sh
+   ```
+
+2. **Check Enhanced Security Context:**
    ```yaml
-   # Scanner needs root for container operations
+   # Scanner security context (unchanged - still needs root)
    scanner:
      securityContext:
-       runAsUser: 0
+       runAsUser: 0  # Required for container and policy operations
        runAsGroup: 0
        allowPrivilegeEscalation: true
        capabilities:
          add: ["SYS_ADMIN"]
    ```
 
-2. **Controller Security Context (restrictive):**
-   ```yaml
-   # Controller can run as non-root
-   automated:
-     controller:
-       securityContext:
-         runAsNonRoot: true
-         runAsUser: 65534
-         readOnlyRootFilesystem: true
-         allowPrivilegeEscalation: false
-         capabilities:
-           drop: ["ALL"]
-   ```
-
-### Issue: Network Policy Blocking
+### Issue: Policy Configuration Access Permissions
 
 **Symptoms:**
 ```
-Connection refused to Black Duck API
-Unable to download container images
-DNS resolution failures
+Cannot read policy configuration from ConfigMap
+Policy validation fails due to access denied
+Controller cannot update policy metrics
 ```
 
 **Diagnosis:**
 ```bash
-# Check network policies
-kubectl get networkpolicy -n bd-selfscan-system
-kubectl describe networkpolicy -n bd-selfscan-system
+# Check policy configuration access
+kubectl auth can-i get configmaps -n bd-selfscan-system --as=system:serviceaccount:bd-selfscan-system:bd-selfscan
 
-# Test connectivity from pod
-kubectl exec -it <scanner-pod> -n bd-selfscan-system -- \
-  curl -v https://your-blackduck-server.com
+# Check enhanced RBAC permissions
+kubectl get clusterrole bd-selfscan -o yaml | grep -A10 -B5 policy
 
-kubectl exec -it <scanner-pod> -n bd-selfscan-system -- \
-  nslookup your-blackduck-server.com
+# Test policy configuration reading
+kubectl exec -it <scanner-pod> -n bd-selfscan-system -- cat /config/applications.yaml | grep -A5 -B5 policy
 ```
 
 **Solutions:**
 
-1. **Disable Network Policies (temporary):**
-   ```bash
-   # Disable for testing
-   helm upgrade bd-selfscan ./bd-selfscan \
-     --set networkPolicy.enabled=false
-   ```
-
-2. **Configure Proper Egress Rules:**
+1. **Update RBAC for Policy Features:**
    ```yaml
-   networkPolicy:
-     enabled: true
-     egress:
-       - to: []  # Allow all egress
-         ports:
-           - protocol: TCP
-             port: 443
-           - protocol: TCP
-             port: 80
-           - protocol: UDP
-             port: 53  # DNS
+   # Enhanced RBAC for policy support
+   rules:
+     - apiGroups: [""]
+       resources: ["configmaps"]
+       verbs: ["get", "watch"]  # Watch for policy config changes
+     - apiGroups: [""]
+       resources: ["events"]
+       verbs: ["create"]  # Create events for policy violations
    ```
 
 ## Monitoring and Metrics Issues
 
-### Issue: Prometheus Metrics Not Scraped
+### Issue: Enhanced Prometheus Metrics with Policy Support
 
 **Symptoms:**
 ```
-No metrics appearing in Prometheus
-ServiceMonitor not discovered
-Scrape target showing as down
+Policy violation metrics not appearing in Prometheus
+bd_selfscan_policy_violations_total not found
+Policy enforcement metrics missing
 ```
 
 **Diagnosis:**
 ```bash
-# Check ServiceMonitor
-kubectl get servicemonitor bd-selfscan -n bd-selfscan-system -o yaml
-
-# Check Prometheus configuration
-kubectl get prometheus -o yaml | grep -A 10 serviceMonitorSelector
-
-# Test metrics endpoint manually
+# Check enhanced metrics endpoint
 kubectl port-forward -n bd-selfscan-system svc/bd-selfscan-controller 8080:8080 &
-curl http://localhost:8080/metrics | head -20
+curl -s http://localhost:8080/metrics | grep -E "policy|violation|enforcement"
+
+# Check policy metrics configuration
+helm get values bd-selfscan | grep -A10 policyMetrics
+
+# Check ServiceMonitor for policy metrics
+kubectl get servicemonitor bd-selfscan -n bd-selfscan-system -o yaml | grep -A5 -B5 policy
 ```
 
 **Solutions:**
 
-1. **Check ServiceMonitor Labels:**
+1. **Enable Enhanced Policy Metrics:**
    ```bash
-   # Ensure ServiceMonitor has correct labels for Prometheus selector
-   kubectl label servicemonitor bd-selfscan -n bd-selfscan-system release=prometheus
-   ```
-
-2. **Enable Monitoring:**
-   ```bash
-   # Enable monitoring components
+   # Enable comprehensive policy metrics
    helm upgrade bd-selfscan ./bd-selfscan \
-     --set monitoring.prometheus.enabled=true \
+     --set monitoring.policyMetrics.enabled=true \
+     --set monitoring.policyMetrics.trackViolations=true \
+     --set monitoring.policyMetrics.trackEnforcementMode=true
+   ```
+
+2. **Update ServiceMonitor for Policy Metrics:**
+   ```bash
+   # Ensure ServiceMonitor captures policy metrics
+   helm upgrade bd-selfscan ./bd-selfscan \
      --set monitoring.serviceMonitor.enabled=true \
-     --set monitoring.serviceMonitor.labels.release=prometheus
+     --set monitoring.serviceMonitor.interval=30s
    ```
 
-3. **Check Prometheus Configuration:**
-   ```yaml
-   # Verify Prometheus ServiceMonitor selector
-   spec:
-     serviceMonitorSelector:
-       matchLabels:
-         release: prometheus
-   ```
-
-### Issue: Grafana Dashboard Not Working
+### Issue: Enhanced Grafana Dashboard with Policy Data
 
 **Symptoms:**
 ```
-Dashboard shows no data
-Queries returning empty results
-Dashboard import errors
+Policy violation data not showing in Grafana
+Policy enforcement charts empty
+Policy trend analysis not working
 ```
 
 **Diagnosis:**
 ```bash
-# Check if metrics are available in Prometheus
-# Query: bd_selfscan_jobs_created_total
-
-# Test query manually
+# Test policy metrics queries manually
 curl -G 'http://prometheus:9090/api/v1/query' \
-  --data-urlencode 'query=bd_selfscan_jobs_created_total'
+  --data-urlencode 'query=bd_selfscan_policy_violations_total'
 
-# Check time range in Grafana
+curl -G 'http://prometheus:9090/api/v1/query' \
+  --data-urlencode 'query=bd_selfscan_policy_enforcement_mode'
+
+# Check time range and data availability
+curl -G 'http://prometheus:9090/api/v1/query_range' \
+  --data-urlencode 'query=rate(bd_selfscan_policy_violations_total[5m])' \
+  --data-urlencode 'start=2024-01-01T00:00:00Z' \
+  --data-urlencode 'end=2024-12-31T23:59:59Z' \
+  --data-urlencode 'step=3600'
 ```
 
 **Solutions:**
 
-1. **Import Dashboard:**
-   ```bash
-   # Import from provided dashboard JSON
-   # (Dashboard ID TBD - will be provided in future release)
-   ```
-
-2. **Basic Query Examples:**
+1. **Enhanced Grafana Queries for Policy Data:**
    ```promql
-   # Job creation rate
-   rate(bd_selfscan_jobs_created_total[5m])
+   # Policy violation rate by severity
+   sum(rate(bd_selfscan_policy_violations_total[5m])) by (severity)
    
-   # Job failure rate
-   rate(bd_selfscan_jobs_failed_total[5m])
+   # Policy enforcement coverage
+   count(bd_selfscan_policy_enforcement_mode) by (mode)
    
-   # Average scan duration
-   avg(bd_selfscan_job_duration_seconds)
+   # Policy evaluation performance
+   histogram_quantile(0.95, rate(bd_selfscan_policy_evaluation_duration_seconds_bucket[5m]))
    
-   # Controller health
-   bd_selfscan_controller_healthy
+   # Applications by policy mode
+   count(bd_selfscan_applications_total) by (policy_mode)
    ```
 
 ## Common Error Messages
 
-### "No space left on device"
+### Enhanced Error Messages with Policy Context
 
-**Cause:** Insufficient ephemeral storage for container image downloads and scanning.
+### "Policy gating configuration invalid"
+
+**Cause:** Invalid policy severity values or configuration syntax.
 
 **Solution:**
 ```bash
-# Increase ephemeral storage limits
+# Validate policy configuration
+kubectl exec job/bd-policy-test -- /scripts/test-policy-gating.sh /config/applications.yaml preview
+
+# Fix common issues:
+# - Use valid severities: BLOCKER,CRITICAL,HIGH,MEDIUM,LOW
+# - Use boolean values: true/false (not True/False)
+# - Check YAML indentation
+```
+
+### "Policy evaluation timeout"
+
+**Cause:** Policy processing taking longer than configured timeout.
+
+**Solution:**
+```bash
+# Increase policy evaluation timeout
 helm upgrade bd-selfscan ./bd-selfscan \
-  --set scanner.resources.limits.ephemeralStorage=200Gi
-
-# Clean up old job pods
-kubectl delete pods -n bd-selfscan-system --field-selector=status.phase=Succeeded
+  --set scanning.policyProcessing.timeout=600 \
+  --set blackduck.api.policyApi.timeout=300
 ```
 
-### "ImagePullBackOff"
+### "Exit code 9: Policy violations detected"
 
-**Cause:** Cannot pull scanner container image.
+**Cause:** Scan found vulnerabilities that violate configured policy thresholds.
 
 **Solution:**
 ```bash
-# Check image name and tag
-kubectl get pod <pod-name> -n bd-selfscan-system -o yaml | grep image:
+# Check specific violations
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -A10 "Policy.*violation"
 
-# Test image pull manually
-docker pull ghcr.io/snps-steve/bd-selfscan/bd-selfscan:v1.1.0
-
-# Check image pull secrets
-kubectl get secret -n bd-selfscan-system | grep -i pull
+# Options:
+# 1. Fix vulnerabilities in application
+# 2. Adjust policy thresholds if too strict
+# 3. Use discovery mode temporarily: policyGating: false
 ```
 
-### "Error: UPGRADE FAILED: cannot patch"
+### "Policy metrics not available"
 
-**Cause:** Helm upgrade conflicts with existing resources.
+**Cause:** Policy metrics collection not enabled or controller not running.
 
 **Solution:**
 ```bash
-# Force upgrade
-helm upgrade bd-selfscan ./bd-selfscan --force
-
-# Or delete and reinstall
-helm uninstall bd-selfscan
-helm install bd-selfscan ./bd-selfscan
-```
-
-### "Failed to parse applications.yaml"
-
-**Cause:** Invalid YAML syntax in application configuration.
-
-**Solution:**
-```bash
-# Validate YAML syntax
-yq eval '.' configs/applications.yaml
-
-# Check for common issues:
-# - Incorrect indentation
-# - Missing quotes around values with special characters
-# - Invalid boolean values (use true/false, not True/False)
-```
-
-### "Black Duck API rate limit exceeded"
-
-**Cause:** Too many concurrent API calls to Black Duck.
-
-**Solution:**
-```bash
-# Reduce concurrent scans
+# Enable policy metrics collection
 helm upgrade bd-selfscan ./bd-selfscan \
-  --set scanning.maxConcurrentScans=2 \
-  --set blackduck.api.requestsPerMinute=15
+  --set monitoring.policyMetrics.enabled=true \
+  --set automated.controller.policyEnforcement.trackViolations=true
+```
 
-# Add delays between scans
-helm upgrade bd-selfscan ./bd-selfscan \
-  --set blackduck.api.retryBackoff=10
+### "Version detection failed with latest tag"
+
+**Cause:** Enhanced version detection cannot process "latest" tags properly.
+
+**Solution:**
+```bash
+# Use explicit version override
+# In configs/applications.yaml:
+projectVersion: "v2.1.0"  # Explicit version
+
+# Or use proper semantic versioning tags
+# Change: app:latest → app:v2.1.0
+```
+
+### "Policy severity INVALID_SEVERITY not recognized"
+
+**Cause:** Using invalid policy severity values.
+
+**Solution:**
+```yaml
+# Use only valid severities
+policyGatingRisk: "BLOCKER,CRITICAL,HIGH"  # Valid
+# NOT: "SEVERE,MAJOR,INVALID_SEVERITY"     # Invalid
 ```
 
 ## Debugging Tools and Commands
 
-### Log Analysis
+### Enhanced Log Analysis with Policy Information
 
 ```bash
-# Get logs from all scanner pods
-kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner --tail=100
+# Get logs with policy context
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner --tail=100 | grep -E "(Policy|BLOCKER|CRITICAL|violation)"
 
-# Get logs from controller (Phase 2)
-kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller --tail=100
+# Get policy-specific controller logs (Phase 2)
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=controller --tail=100 | grep -i policy
 
-# Follow logs in real-time
-kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner -f
+# Follow logs with policy filtering
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner -f | grep --line-buffered -E "(Policy|violation|enforcement)"
 
-# Search for specific errors
-kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner | grep -i error
+# Search for policy evaluation performance
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner | grep -E "policy.*duration|evaluat.*took"
 
-# Get logs from specific job
-kubectl logs -n bd-selfscan-system job/<job-name>
+# Get logs from specific job with policy context
+kubectl logs -n bd-selfscan-system job/<job-name> | grep -A20 -B5 "Policy Gating Configuration"
 
-# Get previous container logs (if pod restarted)
-kubectl logs -n bd-selfscan-system <pod-name> --previous
+# Check for exit code 9 (policy violations)
+kubectl get jobs -n bd-selfscan-system -o yaml | grep -B5 -A5 '"exitCode": 9'
 ```
 
-### Resource Monitoring
+### Enhanced Resource Monitoring with Policy Context
 
 ```bash
-# Monitor resource usage
-watch kubectl top pods -n bd-selfscan-system
+# Monitor resource usage during policy processing
+watch 'kubectl top pods -n bd-selfscan-system; echo "=== Policy Jobs ==="; kubectl get jobs -n bd-selfscan-system -o yaml | grep -c "exitCode.*9"'
 
-# Check node resources
-kubectl describe nodes | grep -A 5 -B 5 "Allocated resources"
+# Check policy cache usage
+kubectl exec -it <scanner-pod> -n bd-selfscan-system -- df -h | grep -E "(cache|tmp)"
 
-# Monitor storage usage
-kubectl get pv | grep bd-selfscan
+# Monitor policy evaluation performance
+kubectl logs -n bd-selfscan-system -l app.kubernetes.io/component=scanner | grep -E "policy.*duration" | tail -10
 
-# Check for resource constraints
-kubectl describe pod <pod-name> -n bd-selfscan-system | grep -A 10 "Limits\|Requests"
+# Check policy processing memory usage
+kubectl describe pod <scanner-pod> -n bd-selfscan-system | grep -A10 "Containers:" | grep -E "(memory|cpu)"
 ```
 
-### Event Monitoring
+### Enhanced Event Monitoring with Policy Context
 
 ```bash
-# Watch events in real-time
-kubectl get events -n bd-selfscan-system --watch
+# Watch policy-related events
+kubectl get events -n bd-selfscan-system --watch | grep -E "(Policy|violation|gating)"
 
-# Get events sorted by time
-kubectl get events -n bd-selfscan-system --sort-by=.metadata.creationTimestamp
+# Get policy-related events sorted by time
+kubectl get events -n bd-selfscan-system --sort-by=.metadata.creationTimestamp | grep -E "(Policy|violation)"
 
-# Filter for warning/error events
-kubectl get events -n bd-selfscan-system --field-selector type=Warning
-kubectl get events -n bd-selfscan-system --field-selector type=Error
+# Filter for policy violation events
+kubectl get events -n bd-selfscan-system --field-selector reason=PolicyViolation
+
+# Monitor controller policy processing events
+kubectl get events -n bd-selfscan-system | grep -E "(controller.*policy|policy.*controller)"
 ```
 
-### Debug Mode
+### Enhanced Debug Mode with Policy Testing
 
 ```bash
-# Enable debug mode for detailed logging
+# Enable comprehensive debug mode with policy support
 helm upgrade bd-selfscan ./bd-selfscan \
   --set debug.enabled=true \
   --set debug.logLevel=DEBUG \
+  --set debug.policyDebug=true \
   --set debug.keepTempFiles=true
 
-# Run single application scan in debug mode
-helm install bd-debug-scan ./bd-selfscan \
-  --set scanTarget="My Application" \
-  --set debug.enabled=true
+# Run enhanced policy debugging
+kubectl create job bd-debug-comprehensive --from=cronjob/bd-selfscan -n bd-selfscan-system
+kubectl exec -it job/bd-debug-comprehensive -n bd-selfscan-system -- DEBUG_ENABLED=true POLICY_DEBUG=true /scripts/test-policy-gating.sh /config/applications.yaml dry-run
+
+# Debug version detection with policy context
+kubectl exec -it job/bd-debug-comprehensive -n bd-selfscan-system -- DEBUG_ENABLED=true /scripts/discover-images.sh "namespace" "labelSelector"
+
+# Test all policy scenarios
+for mode in preview dry-run live; do
+    echo "=== Testing $mode mode ==="
+    kubectl exec -it job/bd-debug-comprehensive -n bd-selfscan-system -- /scripts/test-policy-gating.sh /config/applications.yaml $mode
+done
+
+# Cleanup debug job
+kubectl delete job bd-debug-comprehensive -n bd-selfscan-system
 ```
 
-### Configuration Debugging
+### Enhanced Configuration Debugging with Policy Validation
 
 ```bash
-# Dump current configuration
-kubectl get configmap bd-selfscan-applications -n bd-selfscan-system -o yaml
+# Comprehensive policy configuration testing
+kubectl create job bd-config-debug --from=cronjob/bd-selfscan -n bd-selfscan-system
 
-# Test label selectors
-NAMESPACE="myapp"
-LABEL_SELECTOR="app=myapp"
+# Test policy configuration syntax
+kubectl exec -it job/bd-config-debug -n bd-selfscan-system -- yq eval '.applications[] | select(.policyGating == true)' /config/applications.yaml
+
+# Validate all policy combinations
+kubectl exec -it job/bd-config-debug -n bd-selfscan-system -- /scripts/test-config.sh
+
+# Test policy gating for each application
+for app in $(yq eval '.applications[].name' configs/applications.yaml); do
+    echo "Testing policy configuration for: $app"
+    kubectl exec -it job/bd-config-debug -n bd-selfscan-system -- /scripts/test-policy-gating.sh /config/applications.yaml preview "$app"
+done
+
+# Test label selectors with policy context
+NAMESPACE="target-namespace"
+LABEL_SELECTOR="app=target-app"
 kubectl get pods -n "$NAMESPACE" -l "$LABEL_SELECTOR" --show-labels
 
-# Validate Helm templates
-helm template bd-selfscan ./bd-selfscan --debug
+# Validate enhanced Helm templates
+helm template bd-selfscan ./bd-selfscan --debug --set debug.policyDebug=true
 
-# Check applied values
-helm get values bd-selfscan
+# Check applied values with policy settings
+helm get values bd-selfscan | grep -A20 policy
+
+# Cleanup config debug job
+kubectl delete job bd-config-debug -n bd-selfscan-system
 ```
 
-### Network Debugging
+### Enhanced Network Debugging with Policy API Testing
 
 ```bash
-# Test connectivity from scanner pod
-kubectl run debug-pod --image=nicolaka/netshoot --rm -it -- bash
+# Test enhanced connectivity including policy APIs
+kubectl run debug-enhanced --image=nicolaka/netshoot --rm -it -- bash
 
-# Test Black Duck connectivity
-kubectl exec -it debug-pod -- curl -k https://your-blackduck-server.com
+# Test Black Duck policy API connectivity
+kubectl exec -it debug-enhanced -- curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/projects" | head -10
 
-# Test DNS resolution
-kubectl exec -it debug-pod -- nslookup your-blackduck-server.com
+# Test policy evaluation endpoint
+kubectl exec -it debug-enhanced -- curl -k -H "Authorization: Bearer $BD_TOKEN" "$BD_URL/api/policy-rules"
 
-# Test registry connectivity
-kubectl exec -it debug-pod -- curl -I https://ghcr.io
+# Test enhanced DNS resolution
+kubectl exec -it debug-enhanced -- nslookup your-blackduck-server.com
+
+# Test enhanced registry connectivity
+kubectl exec -it debug-enhanced -- curl -I https://ghcr.io/v2/snps-steve/bd-selfscan/bd-selfscan/manifests/latest
 ```
 
 ---
 
 ## Getting Additional Help
 
-### Support Resources
+### Enhanced Support Resources
 
 - **📖 Documentation**: [README.md](../README.md) | [Installation](INSTALL.md) | [Configuration](CONFIGURATION.md)
-- **🏗️ Architecture**: [System Architecture](ARCHITECTURE.md) - Technical design and components
+- **📜 Scripts Guide**: [Scripts Documentation](../scripts/README.md) - Enhanced scripts with policy gating (v2.1.0)
+- **🏗️ Architecture**: [System Architecture](ARCHITECTURE.md) - Technical design and policy components
 - **🗺️ Roadmap**: [Implementation Status](ROADMAP.md) - Current features and future plans
-- **📝 Changelog**: [Version History](CHANGELOG.md) - Release notes and updates
-- **🔧 API Reference**: [API Documentation](API.md) - Phase 2 controller APIs
+- **📝 Changelog**: [Version History](CHANGELOG.md) - Release notes and policy feature updates
+- **🔧 API Reference**: [API Documentation](API.md) - Phase 2 controller APIs with policy support
 
 ### Community Support
 
-- **🐛 Issues**: [GitHub Issues](https://github.com/snps-steve/bd-selfscan/issues) - Bug reports and feature requests
-- **💬 Discussions**: [GitHub Discussions](https://github.com/snps-steve/bd-selfscan/discussions) - Community help and Q&A
-- **📚 Wiki**: [Project Wiki](https://github.com/snps-steve/bd-selfscan/wiki) - Additional documentation
+- **🐛 Issues**: [GitHub Issues](https://github.com/snps-steve/bd-selfscan/issues) - Bug reports and policy-related feature requests
+- **💬 Discussions**: [GitHub Discussions](https://github.com/snps-steve/bd-selfscan/discussions) - Community help and policy configuration Q&A
+- **📚 Wiki**: [Project Wiki](https://github.com/snps-steve/bd-selfscan/wiki) - Additional documentation and policy examples
 
-### Escalation Process
+### Enhanced Escalation Process
 
-1. **Check this troubleshooting guide** for common issues
-2. **Search existing GitHub issues** for similar problems
-3. **Enable debug mode** and collect detailed logs
-4. **Create GitHub issue** with:
-   - Detailed problem description
-   - Steps to reproduce
-   - Environment information (Kubernetes version, Helm version, etc.)
-   - Debug logs and configuration
-   - Expected vs. actual behavior
+1. **Check this troubleshooting guide** for common issues including policy problems
+2. **Search existing GitHub issues** for similar problems including policy-related issues
+3. **Enable enhanced debug mode** and collect detailed logs including policy information
+4. **Run policy configuration tests** using the enhanced diagnostic scripts
+5. **Create GitHub issue** with:
+   - Detailed problem description including policy context
+   - Steps to reproduce including policy configuration
+   - Environment information (Kubernetes version, Helm version, BD SelfScan version)
+   - Enhanced debug logs including policy processing information
+   - Policy configuration (sanitized of sensitive data)
+   - Expected vs. actual behavior including policy enforcement expectations
 
-### Emergency Support
+### Emergency Support for Policy Issues
 
-For critical production issues:
+For critical production issues related to policy enforcement:
 
-1. **Disable automated scanning** temporarily:
+1. **Temporarily disable policy enforcement**:
    ```bash
-   helm upgrade bd-selfscan ./bd-selfscan --set automated.enabled=false
+   # Switch to discovery mode temporarily
+   kubectl patch configmap bd-selfscan-applications -n bd-selfscan-system --patch '
+   data:
+     applications.yaml: |
+       applications:
+         - name: "Emergency App"
+           policyGating: false  # Temporarily disable
+   '
    ```
 
-2. **Clean up failed resources**:
+2. **Disable automated policy scanning** temporarily:
    ```bash
-   kubectl delete jobs -n bd-selfscan-system --field-selector=status.successful=0
-   kubectl delete pods -n bd-selfscan-system --field-selector=status.phase=Failed
+   helm upgrade bd-selfscan ./bd-selfscan \
+     --set automated.enabled=false \
+     --set scanning.policyGating.enabled=false
    ```
 
-3. **Rollback to previous version** if needed:
+3. **Clean up policy violation jobs**:
+   ```bash
+   # Clean up jobs that failed due to policy violations
+   kubectl get jobs -n bd-selfscan-system -o yaml | grep -l '"exitCode": 9' | xargs kubectl delete -f -
+   ```
+
+4. **Rollback to previous version** if policy features causing issues:
    ```bash
    helm rollback bd-selfscan
    ```
@@ -1342,8 +1391,15 @@ For critical production issues:
 ---
 
 **📊 Implementation Status:**
-- **Phase 1**: ✅ Production Ready (100% complete)
-- **Phase 2**: 🚀 85% Complete (Beta phase with controller, metrics, health endpoints)
+- **Phase 1**: ✅ Production Ready with Policy Gating (100% complete)
+- **Phase 2**: 🚀 85% Complete (Beta phase with controller, metrics, health endpoints, and policy support)
+
+**🔒 Policy Gating Features:**
+- ✅ **Per-application policy enforcement** troubleshooting
+- ✅ **Three enforcement modes** diagnostic support
+- ✅ **Exit code 9 handling** for policy violations
+- ✅ **Enhanced diagnostic scripts** (v2.1.0) troubleshooting
+- ✅ **Policy violation tracking** and metrics debugging
 
 **🔗 For configuration help, see [CONFIGURATION.md](CONFIGURATION.md)**
 **🚀 For installation guidance, see [INSTALL.md](INSTALL.md)**
