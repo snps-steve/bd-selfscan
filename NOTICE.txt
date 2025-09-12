@@ -1,0 +1,14 @@
+This software is made available by Black Duck Software, Inc. under a source-available license.
+
+It is intended solely for use in conjunction with Black Duck Software's Software Composition Analysis (SCA) product.
+
+Use of this software in any commercial product, service, or offering — including integration with competing SCA tools — is strictly prohibited without a separate commercial license.
+
+You are permitted to view, modify, and redistribute this software for non-commercial purposes, provided that:
+- You retain this notice in all copies or substantial portions of the software.
+- You do not use the software in a commercial or competitive context.
+- You do not remove or alter references to Black Duck Software.
+
+This software is not licensed under an OSI-approved open source license.
+
+For commercial licensing inquiries, please contact: legal@blackduck.com
