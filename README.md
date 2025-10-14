@@ -85,8 +85,7 @@ applications:
 ```bash
 # Install BD SelfScan
 helm install bd-selfscan ./bd-selfscan \
-  --namespace bd-selfscan-system \
-  --create-namespace
+  --namespace bd-selfscan-system 
 
 # Verify installation
 kubectl get all -n bd-selfscan-system
