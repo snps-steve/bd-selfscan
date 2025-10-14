@@ -44,9 +44,12 @@ onDemand:
 
 # Automated scanning configuration (Phase 2)
 automated:
-  enabled: false
+  enabled: true
   # Controller configuration for Phase 2
   controller:
+    image: "python:3.11-alpine"
+    imagePullPolicy: "IfNotPresent"
+    installDependencies: true
     replicas: 1
     resources:
       requests:
@@ -55,6 +58,28 @@ automated:
       limits:
         memory: "512Mi"
         cpu: "500m"
+    
+    # Controller behavior settings
+    scanJobTimeout: 3600
+    maxConcurrentScans: 5
+    cleanupInterval: 3600
+    configReloadInterval: 600
+    
+    # Network policy configuration
+    networkPolicy:
+      enabled: false
+    
+    # Node selection
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+  
+  # Scheduled scanning configuration
+  scheduled:
+    enabled: false
+    failedJobsHistoryLimit: 3
+    successfulJobsHistoryLimit: 1
+    startingDeadlineSeconds: 300
 
 # Scan target (for on-demand scanning)
 scanTarget: ""
