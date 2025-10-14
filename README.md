@@ -25,118 +25,6 @@ This license:
  
 Please see the [LICENSE](https://github.com/snps-steve/bd-selfscan/blob/main/LICENSE.txt) and [NOTICE](https://github.com/snps-steve/bd-selfscan/blob/main/NOTICE.txt) located with the source.
 
-## 🏗️ Architecture & Design
-
-### Project Organization in Black Duck
-
-BD SelfScan follows a microservices-friendly approach to organizing scan results:
-
-- **One Project per microservice** - Clear ownership and vulnerability history
-- **Versions = release tags** (e.g., 1.12.0, 2025.08.1) or build numbers  
-- **Project Groups for applications** - Roll up policies, reporting, and permissions
-- **Deterministic naming** - Consistent across CI/CD pipelines
-
-Example structure:
-```
-Project Group: Acme Checkout
-├── Project: cart-service → Versions: 2025.08.1, 2025.08.2
-├── Project: pricing-service → Versions: 1.19.0, 1.19.1  
-└── Project: gateway-service → Versions: v87, v88
-```
-
-### Configuration-Driven Application Mapping with Policy Gating
-
-Applications are mapped via configuration file from `namespace + labelSelector` to Black Duck Project Groups, with optional per-application policy enforcement:
-
-```yaml
-applications:
-  - name: "Critical Production App"
-    namespace: "production"
-    labelSelector: "app=payment-service"  
-    projectGroup: "Payment Services"
-    projectTier: 1
-    # ENHANCED: Per-application policy gating
-    policyGating: true
-    policyGatingRisk: "BLOCKER,CRITICAL,HIGH"  # Explicit policy severities
-    scanOnDeploy: true    # For Phase 2 automation
-    
-  - name: "Standard Application"
-    namespace: "staging"
-    labelSelector: "app=user-service"
-    projectGroup: "User Services"
-    projectTier: 3
-    # Uses tier-based defaults: BLOCKER,CRITICAL for tier 3
-    policyGating: true
-    
-  - name: "Discovery Mode App"
-    namespace: "development"
-    labelSelector: "app=test-service"
-    projectGroup: "Development Services"
-    projectTier: 4
-    # Discovery mode - scan but never fail builds
-    policyGating: false
-```
-
-### Policy Gating Modes
-
-BD SelfScan supports three policy enforcement modes:
-
-1. **Enforcement Mode** (`policyGating: true` with explicit `policyGatingRisk`)
-   - Scan results **WILL FAIL** builds/deployments on policy violations
-   - Custom severity thresholds per application
-   - Exit code 9 returned on policy violations
-
-2. **Tier-Based Enforcement** (`policyGating: true` without `policyGatingRisk`)
-   - Uses project tier defaults for policy severities
-   - Tier 1: BLOCKER,CRITICAL,HIGH | Tier 2: BLOCKER,CRITICAL | Tier 3: BLOCKER,CRITICAL | Tier 4: BLOCKER
-
-3. **Discovery Mode** (`policyGating: false`)
-   - Scans report vulnerabilities but **NEVER FAIL** builds
-   - Perfect for discovery phases and non-critical applications
-
-### How BD SelfScan Works
-
-1. **Discovery**: Uses Kubernetes label selectors to find pods in target namespaces
-2. **Image Extraction**: Extracts container image references from pod specifications
-3. **Policy Configuration**: Reads per-application policy gating settings
-4. **Image Download**: Downloads container images using Skopeo for offline scanning
-5. **BDSC Scanning**: Performs layer-by-layer vulnerability analysis using Black Duck Signature Scanner
-6. **Policy Enforcement**: Evaluates scan results against configured policy thresholds
-7. **Project Creation**: Automatically creates/updates Black Duck projects and project groups
-8. **Result Organization**: Organizes scan results by microservice with proper versioning
-
-## 📋 Implementation Status
-
-### Phase 1: On-Demand Scanning ✅ **COMPLETE**
-
-**Current Status**: Fully implemented and tested
-
-**Components**:
-- Custom Docker image with pre-installed tools (Java, kubectl, yq, jq, skopeo)
-- Kubernetes Job template for on-demand execution
-- Configuration-driven application mapping
-- **Per-application policy gating and enforcement**
-- BDSC-based container scanning with intelligent version detection
-- GitHub Container Registry integration
-
-**Key Features**:
-- Scan single applications or all configured applications
-- **Per-application policy gating** with custom severity thresholds
-- **Intelligent version detection** with explicit override support
-- Automatic Black Duck Project Group creation
-- Configurable resource limits and timeouts
-- **Enhanced diagnostic and testing scripts** (v2.1.0)
-- Debug mode for troubleshooting
-- Comprehensive error handling and logging
-
-### Phase 2: Automated Scanning 🚧 **PLANNED**
-
-**Planned Features**:
-- Kubernetes operator to watch for deployment events
-- Automatic scanning when pods are created/updated
-- Scheduled scanning based on cron expressions
-- Integration with GitOps workflows
-
 ## ⚡ Quick Start - New Deployment/Installation
 
 ### Prerequisites
@@ -333,6 +221,118 @@ echo "3. Vulnerability data is populated"
 echo "4. Policy violations are reported and enforced"
 echo "5. Check for exit code 9 in job logs (policy violations detected)"
 ```
+
+## 🏗️ Architecture & Design
+
+### Project Organization in Black Duck
+
+BD SelfScan follows a microservices-friendly approach to organizing scan results:
+
+- **One Project per microservice** - Clear ownership and vulnerability history
+- **Versions = release tags** (e.g., 1.12.0, 2025.08.1) or build numbers  
+- **Project Groups for applications** - Roll up policies, reporting, and permissions
+- **Deterministic naming** - Consistent across CI/CD pipelines
+
+Example structure:
+```
+Project Group: Acme Checkout
+├── Project: cart-service → Versions: 2025.08.1, 2025.08.2
+├── Project: pricing-service → Versions: 1.19.0, 1.19.1  
+└── Project: gateway-service → Versions: v87, v88
+```
+
+### Configuration-Driven Application Mapping with Policy Gating
+
+Applications are mapped via configuration file from `namespace + labelSelector` to Black Duck Project Groups, with optional per-application policy enforcement:
+
+```yaml
+applications:
+  - name: "Critical Production App"
+    namespace: "production"
+    labelSelector: "app=payment-service"  
+    projectGroup: "Payment Services"
+    projectTier: 1
+    # ENHANCED: Per-application policy gating
+    policyGating: true
+    policyGatingRisk: "BLOCKER,CRITICAL,HIGH"  # Explicit policy severities
+    scanOnDeploy: true    # For Phase 2 automation
+    
+  - name: "Standard Application"
+    namespace: "staging"
+    labelSelector: "app=user-service"
+    projectGroup: "User Services"
+    projectTier: 3
+    # Uses tier-based defaults: BLOCKER,CRITICAL for tier 3
+    policyGating: true
+    
+  - name: "Discovery Mode App"
+    namespace: "development"
+    labelSelector: "app=test-service"
+    projectGroup: "Development Services"
+    projectTier: 4
+    # Discovery mode - scan but never fail builds
+    policyGating: false
+```
+
+### Policy Gating Modes
+
+BD SelfScan supports three policy enforcement modes:
+
+1. **Enforcement Mode** (`policyGating: true` with explicit `policyGatingRisk`)
+   - Scan results **WILL FAIL** builds/deployments on policy violations
+   - Custom severity thresholds per application
+   - Exit code 9 returned on policy violations
+
+2. **Tier-Based Enforcement** (`policyGating: true` without `policyGatingRisk`)
+   - Uses project tier defaults for policy severities
+   - Tier 1: BLOCKER,CRITICAL,HIGH | Tier 2: BLOCKER,CRITICAL | Tier 3: BLOCKER,CRITICAL | Tier 4: BLOCKER
+
+3. **Discovery Mode** (`policyGating: false`)
+   - Scans report vulnerabilities but **NEVER FAIL** builds
+   - Perfect for discovery phases and non-critical applications
+
+### How BD SelfScan Works
+
+1. **Discovery**: Uses Kubernetes label selectors to find pods in target namespaces
+2. **Image Extraction**: Extracts container image references from pod specifications
+3. **Policy Configuration**: Reads per-application policy gating settings
+4. **Image Download**: Downloads container images using Skopeo for offline scanning
+5. **BDSC Scanning**: Performs layer-by-layer vulnerability analysis using Black Duck Signature Scanner
+6. **Policy Enforcement**: Evaluates scan results against configured policy thresholds
+7. **Project Creation**: Automatically creates/updates Black Duck projects and project groups
+8. **Result Organization**: Organizes scan results by microservice with proper versioning
+
+## 📋 Implementation Status
+
+### Phase 1: On-Demand Scanning ✅ **COMPLETE**
+
+**Current Status**: Fully implemented and tested
+
+**Components**:
+- Custom Docker image with pre-installed tools (Java, kubectl, yq, jq, skopeo)
+- Kubernetes Job template for on-demand execution
+- Configuration-driven application mapping
+- **Per-application policy gating and enforcement**
+- BDSC-based container scanning with intelligent version detection
+- GitHub Container Registry integration
+
+**Key Features**:
+- Scan single applications or all configured applications
+- **Per-application policy gating** with custom severity thresholds
+- **Intelligent version detection** with explicit override support
+- Automatic Black Duck Project Group creation
+- Configurable resource limits and timeouts
+- **Enhanced diagnostic and testing scripts** (v2.1.0)
+- Debug mode for troubleshooting
+- Comprehensive error handling and logging
+
+### Phase 2: Automated Scanning 🚧 **PLANNED**
+
+**Planned Features**:
+- Kubernetes operator to watch for deployment events
+- Automatic scanning when pods are created/updated
+- Scheduled scanning based on cron expressions
+- Integration with GitOps workflows
 
 ## 🔧 Technical Implementation
 
