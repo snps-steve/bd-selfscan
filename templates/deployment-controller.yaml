@@ -168,27 +168,28 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       
-    volumes:
-      # Controller Python script
-      - name: controller-script
-        configMap:
-          name: {{ include "bd-selfscan.name" . }}-controller
-          defaultMode: 0555
-      
-      # Application configuration
-      - name: applications-config
-        configMap:
-          name: bd-selfscan-applications
-      
-      # Temporary directory (writable)
-      - name: tmp
-        emptyDir:
-          sizeLimit: 100Mi
-      
-      # Python dependencies (shared between init and main container)
-      - name: python-deps
-        emptyDir:
-          sizeLimit: 500Mi
+      # Volumes for controller pod
+      volumes:
+        # Controller Python script
+        - name: controller-script
+          configMap:
+            name: {{ include "bd-selfscan.name" . }}-controller
+            defaultMode: 0555
+        
+        # Application configuration
+        - name: applications-config
+          configMap:
+            name: bd-selfscan-applications
+        
+        # Temporary directory (writable)
+        - name: tmp
+          emptyDir:
+            sizeLimit: 100Mi
+        
+        # Python dependencies (shared between init and main container)
+        - name: python-deps
+          emptyDir:
+            sizeLimit: 500Mi
 
 ---
 # ConfigMap containing the controller Python script
