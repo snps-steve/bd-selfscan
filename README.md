@@ -663,9 +663,10 @@ kubectl exec -it job/bd-policy-scenarios -n bd-selfscan-system -- /scripts/test-
 - [x] **Enhanced diagnostic and testing scripts (v2.1.0)**
 - [x] Cluster-wide RBAC and security
 
-### Phase 2 🚧 (Planned)
-- [ ] Kubernetes controller for deployment events
-- [ ] Automated scan triggering with policy enforcement
+### Phase 2 🚧 (In Process)
+- [x] Kubernetes controller for deployment events
+- [x] Automated scan triggering with policy enforcement
+- [ ] Testing scan automation 
 - [ ] Scheduled scanning with cron
 - [ ] Health checks and self-healing
 - [ ] Policy violation notifications
@@ -699,10 +700,6 @@ pip install -r scripts/requirements-dev.txt
 3. Make your changes with proper testing (including policy gating tests)
 4. Commit with conventional commit messages
 5. Push and create a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🙋 Support
 
