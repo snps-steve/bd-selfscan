@@ -39,6 +39,9 @@ Please see the [LICENSE](https://github.com/snps-steve/bd-selfscan/blob/main/LIC
 git clone https://github.com/snps-steve/bd-selfscan.git
 cd bd-selfscan
 
+# Run pre-flight checks to validate environment
+./bin/preflight-check.sh
+
 # Create namespace and secrets
 kubectl create namespace bd-selfscan-system
 kubectl create secret generic blackduck-creds \
@@ -83,9 +86,13 @@ applications:
 
 ### Step 3: Install BD SelfScan
 ```bash
-# Install BD SelfScan
-helm install bd-selfscan ./bd-selfscan \
-  --namespace bd-selfscan-system 
+# Install BD SelfScan using Makefile (recommended)
+make install
+
+# Or install manually with Helm
+helm install bd-selfscan . \
+  --namespace bd-selfscan-system \
+  --create-namespace
 
 # Verify installation
 kubectl get all -n bd-selfscan-system
@@ -156,6 +163,91 @@ kubectl apply -f configs/applications.yaml
 
 # Upgrade BD SelfScan with new settings
 helm upgrade bd-selfscan ./bd-selfscan
+```
+
+## 🛠️ Makefile Commands
+
+The project includes a Makefile for common operations. Run `make help` to see all available commands:
+
+```bash
+# Installation
+make install              # Install BD SelfScan with Helm
+make uninstall            # Uninstall BD SelfScan
+make upgrade              # Upgrade existing installation
+
+# Scanning
+make scan APP=<app-name>  # Scan a specific application
+make scan-all             # Scan all configured applications
+
+# Monitoring & Debugging
+make status               # Show deployment status
+make logs                 # View scanner logs (follow mode)
+make logs-all             # View all logs from bd-selfscan-system
+make events               # Show recent events
+
+# Maintenance
+make clean                # Clean up completed/failed jobs
+make restart              # Restart the controller deployment
+
+# Development
+make lint                 # Lint Helm chart
+make template             # Render Helm templates locally
+make test                 # Run Helm chart tests
+make preflight            # Run pre-flight checks
+make validate             # Validate values.yaml against schema
+```
+
+### Example Workflows
+```bash
+# Full installation workflow
+make preflight            # Validate environment
+make lint                 # Check chart syntax
+make install              # Deploy to cluster
+make status               # Verify deployment
+
+# Scanning workflow
+make scan APP="Black Duck SCA"   # Scan specific app
+make logs                        # Monitor progress
+make status                      # Check results
+
+# Troubleshooting workflow
+make events               # Check for issues
+make logs-all             # View all logs
+make clean                # Clean up failed jobs
+```
+
+## ✅ Pre-flight Checks
+
+Before installing BD SelfScan, run the pre-flight check script to validate your environment:
+
+```bash
+./bin/preflight-check.sh
+```
+
+The script validates:
+- **Kubernetes Version**: Ensures cluster is running v1.19+
+- **Helm Version**: Verifies Helm 3.x is installed
+- **Cluster Connectivity**: Tests kubectl access to the cluster
+- **RBAC Permissions**: Checks ability to create required resources
+- **Black Duck Credentials**: Validates the secret exists and contains required keys
+- **Namespace**: Verifies the target namespace exists or can be created
+
+Example output:
+```
+============================================================
+BD SelfScan Pre-flight Checks
+============================================================
+
+[✓] Kubernetes version: v1.28.3 (requires v1.19+)
+[✓] Helm version: v3.14.0 (requires v3.x)
+[✓] Cluster connectivity: OK
+[✓] RBAC permissions: Can create ClusterRole, ClusterRoleBinding
+[✓] Namespace bd-selfscan-system: exists
+[✓] Secret blackduck-creds: found with required keys
+
+============================================================
+All pre-flight checks passed! Ready to install BD SelfScan.
+============================================================
 ```
 
 ## 📊 Quick Start - Monitoring
@@ -659,6 +751,97 @@ kubectl exec -it job/bd-policy-scenarios -n bd-selfscan-system -- /scripts/test-
 3. **Project Naming**: Follow consistent naming conventions for microservices architecture
 4. **Policy Enforcement**: Integrate security policies into CI/CD pipelines with clear failure modes
 5. **Version Detection**: Intelligent version detection with explicit override support
+
+## 🐛 Bug Fixes
+
+The following bugs have been identified and fixed in this release:
+
+### Critical Bug Fixes
+
+1. **Exit Code Handling in scan-application.sh** (Fixed)
+   - **Issue**: Policy violation exit code (9) was being lost and replaced with generic error code (3)
+   - **Location**: [`scripts/scan-application.sh`](scripts/scan-application.sh:540)
+   - **Fix**: Changed `return 3` to `return $exit_code` to preserve the actual exit code from BDSC scanning
+   - **Impact**: CI/CD pipelines now correctly detect policy violations vs. scan errors
+
+2. **Incorrect License Annotation in Chart.yaml** (Fixed)
+   - **Issue**: Chart metadata incorrectly listed "MIT" license instead of "BSL-1.1"
+   - **Location**: [`Chart.yaml`](Chart.yaml)
+   - **Fix**: Updated license annotation to match the actual BSL-1.1 license
+   - **Impact**: Proper license compliance and transparency
+
+3. **Maintainer Label in Dockerfile** (Fixed)
+   - **Issue**: Maintainer label was set to placeholder value
+   - **Location**: [`docker/Dockerfile`](docker/Dockerfile)
+   - **Fix**: Updated to correct maintainer email
+   - **Impact**: Proper attribution and contact information
+
+### Known Issues (To Be Addressed)
+
+- **Hardcoded Namespace**: Some scripts have hardcoded `bd-selfscan-system` namespace
+- **Missing Input Validation**: Application names not validated for special characters
+- **Race Condition**: Potential race in controller when multiple deployments update simultaneously
+
+## ✨ Enhancements
+
+The following enhancements have been implemented to improve usability, reliability, and maintainability:
+
+### Installation & Usability
+
+1. **Pre-flight Check Script** ([`bin/preflight-check.sh`](bin/preflight-check.sh))
+   - Validates Kubernetes version (v1.19+)
+   - Checks Helm version (v3.x)
+   - Tests cluster connectivity
+   - Verifies RBAC permissions
+   - Validates Black Duck credentials secret
+   - Provides clear pass/fail output with actionable messages
+
+2. **Makefile for Common Operations** ([`Makefile`](Makefile))
+   - `make install` / `make uninstall` - Simplified deployment
+   - `make scan APP=<name>` - Easy application scanning
+   - `make status` / `make logs` - Quick monitoring
+   - `make clean` - Job cleanup
+   - `make lint` / `make test` - Development helpers
+   - `make help` - Self-documenting command reference
+
+3. **Helm Chart Tests** ([`templates/tests/test-connection.yaml`](templates/tests/test-connection.yaml))
+   - Validates Black Duck server connectivity
+   - Tests RBAC permissions
+   - Run with `helm test bd-selfscan`
+
+### Configuration & Validation
+
+4. **Values Schema Validation** ([`values.schema.json`](values.schema.json))
+   - JSON Schema for `values.yaml` validation
+   - Catches configuration errors before deployment
+   - Documents all available configuration options
+   - Enforces required fields and valid values
+
+5. **Helm Package Optimization** ([`.helmignore`](.helmignore))
+   - Excludes unnecessary files from Helm packages
+   - Reduces package size
+   - Improves deployment speed
+
+### Documentation
+
+6. **Updated Project Structure**
+   - Added new files to project structure documentation
+   - Documented all bin/ scripts
+   - Added templates/tests/ directory
+
+7. **Comprehensive Evaluation Report** ([`EVALUATION_AND_IMPROVEMENTS.md`](EVALUATION_AND_IMPROVEMENTS.md))
+   - Full codebase analysis
+   - Security recommendations
+   - Scalability improvements
+   - Future enhancement roadmap
+
+### Future Enhancements (Planned)
+
+- **Prometheus Metrics**: Add `/metrics` endpoint for monitoring
+- **Structured Logging**: JSON logging for better observability
+- **Retry Logic**: Automatic retry for transient failures
+- **Resource Quotas**: Namespace-level resource management
+- **Multi-cluster Support**: Federation for large deployments
 
 ## 🛣️ Roadmap
 
