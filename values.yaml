@@ -1,7 +1,7 @@
 # BD SelfScan Enhanced Configuration Values with Per-Application Policy Gating
 # This file contains enhanced configuration values for the BD SelfScan Helm chart
 # Includes security best practices and DevSecOps improvements with per-application policy enforcement
-
+#
 # Global configuration
 global:
   namespace: "bd-selfscan-system"
