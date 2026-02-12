@@ -1,0 +1,61 @@
+# Patterns to ignore when building Helm packages
+# This file is used by 'helm package' command
+
+# Version control
+.git
+.gitignore
+.gitattributes
+.github/
+
+# Documentation (except README)
+*.md
+!README.md
+docs/
+
+# Development files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+*.tmp
+*~
+
+# Test files
+tests/
+*_test.go
+*_test.yaml
+
+# Build artifacts
+bin/
+docker/
+*.tar.gz
+*.tgz
+
+# CI/CD
+.travis.yml
+.gitlab-ci.yml
+Jenkinsfile
+azure-pipelines.yml
+.circleci/
+
+# IDE and editor files
+.editorconfig
+.prettierrc
+.eslintrc
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Evaluation and analysis files
+EVALUATION*.md
+IMPROVEMENTS*.md
+CHANGELOG*.md
+
+# Makefile (not needed in chart)
+Makefile
+
+# License files are kept
+# LICENSE.txt
+# NOTICE.txt

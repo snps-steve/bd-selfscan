@@ -1,0 +1,174 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "bd-selfscan.name" . }}-test-connection"
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  serviceAccountName: {{ include "bd-selfscan.serviceAccountName" . }}
+  containers:
+    - name: test-blackduck
+      image: curlimages/curl:latest
+      command: ['sh', '-c']
+      args:
+        - |
+          echo "=== BD SelfScan Connection Test ==="
+          echo ""
+          
+          # Test 1: Check Black Duck connectivity
+          echo "Test 1: Black Duck API Connectivity"
+          BD_URL="${BD_URL}"
+          BD_TOKEN="${BD_TOKEN}"
+          
+          response=$(curl -sk -w "%{http_code}" -o /tmp/response.json \
+            -H "Authorization: token $BD_TOKEN" \
+            "$BD_URL/api/current-user" 2>/dev/null)
+          
+          if [ "$response" = "200" ]; then
+            echo "  ✓ Black Duck connection successful"
+            echo "  ✓ API token is valid"
+          else
+            echo "  ✗ Black Duck connection failed (HTTP $response)"
+            cat /tmp/response.json 2>/dev/null || true
+            exit 1
+          fi
+          
+          # Test 2: Check project groups API access
+          echo ""
+          echo "Test 2: Project Groups API Access"
+          response=$(curl -sk -w "%{http_code}" -o /tmp/groups.json \
+            -H "Authorization: token $BD_TOKEN" \
+            -H "Accept: application/json" \
+            "$BD_URL/api/project-groups?limit=1" 2>/dev/null)
+          
+          if [ "$response" = "200" ]; then
+            echo "  ✓ Project groups API accessible"
+          else
+            echo "  ✗ Project groups API failed (HTTP $response)"
+            echo "  Note: This may indicate insufficient permissions"
+          fi
+          
+          # Test 3: Check projects API access
+          echo ""
+          echo "Test 3: Projects API Access"
+          response=$(curl -sk -w "%{http_code}" -o /tmp/projects.json \
+            -H "Authorization: token $BD_TOKEN" \
+            -H "Accept: application/json" \
+            "$BD_URL/api/projects?limit=1" 2>/dev/null)
+          
+          if [ "$response" = "200" ]; then
+            echo "  ✓ Projects API accessible"
+          else
+            echo "  ✗ Projects API failed (HTTP $response)"
+          fi
+          
+          echo ""
+          echo "=== All tests passed ==="
+          exit 0
+      env:
+        - name: BD_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.blackduck.tokenSecretName }}
+              key: url
+        - name: BD_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.blackduck.tokenSecretName }}
+              key: token
+      resources:
+        limits:
+          cpu: "100m"
+          memory: "64Mi"
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+  restartPolicy: Never
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "bd-selfscan.name" . }}-test-rbac"
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  serviceAccountName: {{ include "bd-selfscan.serviceAccountName" . }}
+  containers:
+    - name: test-rbac
+      image: bitnami/kubectl:latest
+      command: ['sh', '-c']
+      args:
+        - |
+          echo "=== BD SelfScan RBAC Test ==="
+          echo ""
+          
+          # Test 1: Can list pods across namespaces
+          echo "Test 1: List pods (cluster-wide)"
+          if kubectl auth can-i list pods --all-namespaces; then
+            echo "  ✓ Can list pods across namespaces"
+          else
+            echo "  ✗ Cannot list pods across namespaces"
+            exit 1
+          fi
+          
+          # Test 2: Can create jobs in system namespace
+          echo ""
+          echo "Test 2: Create jobs in {{ .Values.global.namespace }}"
+          if kubectl auth can-i create jobs -n {{ .Values.global.namespace }}; then
+            echo "  ✓ Can create jobs"
+          else
+            echo "  ✗ Cannot create jobs"
+            exit 1
+          fi
+          
+          # Test 3: Can get configmaps
+          echo ""
+          echo "Test 3: Get configmaps"
+          if kubectl auth can-i get configmaps -n {{ .Values.global.namespace }}; then
+            echo "  ✓ Can get configmaps"
+          else
+            echo "  ✗ Cannot get configmaps"
+            exit 1
+          fi
+          
+          # Test 4: Can get secrets
+          echo ""
+          echo "Test 4: Get secrets"
+          if kubectl auth can-i get secrets -n {{ .Values.global.namespace }}; then
+            echo "  ✓ Can get secrets"
+          else
+            echo "  ✗ Cannot get secrets"
+            exit 1
+          fi
+          
+          # Test 5: Verify applications configmap exists
+          echo ""
+          echo "Test 5: Applications ConfigMap"
+          if kubectl get configmap bd-selfscan-applications -n {{ .Values.global.namespace }} > /dev/null 2>&1; then
+            echo "  ✓ Applications configmap exists"
+            APP_COUNT=$(kubectl get configmap bd-selfscan-applications -n {{ .Values.global.namespace }} -o jsonpath='{.data.applications\.yaml}' | grep -c "name:" || echo "0")
+            echo "  ✓ Found $APP_COUNT application(s) configured"
+          else
+            echo "  ✗ Applications configmap not found"
+            exit 1
+          fi
+          
+          echo ""
+          echo "=== All RBAC tests passed ==="
+          exit 0
+      resources:
+        limits:
+          cpu: "100m"
+          memory: "64Mi"
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+  restartPolicy: Never

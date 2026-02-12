@@ -1,0 +1,433 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BD SelfScan Helm Chart Values",
+  "description": "Configuration values for BD SelfScan Kubernetes container vulnerability scanning",
+  "type": "object",
+  "required": ["global", "blackduck"],
+  "properties": {
+    "global": {
+      "type": "object",
+      "description": "Global configuration settings",
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "default": "bd-selfscan-system",
+          "description": "Kubernetes namespace for BD SelfScan resources"
+        }
+      },
+      "required": ["namespace"]
+    },
+    "nameOverride": {
+      "type": "string",
+      "default": "",
+      "description": "Override the chart name"
+    },
+    "fullnameOverride": {
+      "type": "string",
+      "default": "",
+      "description": "Override the full release name"
+    },
+    "registry": {
+      "type": "object",
+      "description": "Container registry configuration",
+      "properties": {
+        "imagePullSecrets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "default": [],
+          "description": "List of image pull secrets for private registries"
+        }
+      }
+    },
+    "rbac": {
+      "type": "object",
+      "description": "RBAC configuration",
+      "properties": {
+        "create": {
+          "type": "boolean",
+          "default": true,
+          "description": "Create RBAC resources"
+        },
+        "clusterRole": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use cluster-wide permissions for multi-namespace scanning"
+        },
+        "serviceAccount": {
+          "type": "object",
+          "properties": {
+            "create": {
+              "type": "boolean",
+              "default": true
+            },
+            "name": {
+              "type": "string",
+              "default": ""
+            },
+            "annotations": {
+              "type": "object",
+              "default": {}
+            }
+          }
+        }
+      }
+    },
+    "blackduck": {
+      "type": "object",
+      "description": "Black Duck SCA configuration",
+      "required": ["tokenSecretName"],
+      "properties": {
+        "tokenSecretName": {
+          "type": "string",
+          "default": "blackduck-creds",
+          "description": "Name of the Kubernetes secret containing Black Duck credentials (url and token keys)"
+        },
+        "trustCert": {
+          "type": "boolean",
+          "default": true,
+          "description": "Trust SSL certificates (set to false for production with valid certs)"
+        },
+        "connectionTimeout": {
+          "type": "integer",
+          "default": 120,
+          "minimum": 10,
+          "maximum": 600,
+          "description": "Connection timeout in seconds"
+        },
+        "readTimeout": {
+          "type": "integer",
+          "default": 300,
+          "minimum": 30,
+          "maximum": 1800,
+          "description": "Read timeout in seconds"
+        },
+        "verifySsl": {
+          "type": "boolean",
+          "default": false,
+          "description": "Verify SSL certificates"
+        },
+        "apiVersion": {
+          "type": "string",
+          "default": "2023.7.0",
+          "description": "Black Duck API version for compatibility"
+        }
+      }
+    },
+    "onDemand": {
+      "type": "object",
+      "description": "On-demand scanning configuration (Phase 1)",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable on-demand scanning"
+        }
+      }
+    },
+    "automated": {
+      "type": "object",
+      "description": "Automated scanning configuration (Phase 2)",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable automated scanning controller"
+        },
+        "controller": {
+          "type": "object",
+          "properties": {
+            "image": {
+              "type": "string",
+              "default": "python:3.11-alpine"
+            },
+            "imagePullPolicy": {
+              "type": "string",
+              "enum": ["Always", "IfNotPresent", "Never"],
+              "default": "IfNotPresent"
+            },
+            "replicas": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 3
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "type": "object"
+                },
+                "limits": {
+                  "type": "object"
+                }
+              }
+            },
+            "scanJobTimeout": {
+              "type": "integer",
+              "default": 3600,
+              "minimum": 300,
+              "maximum": 14400
+            },
+            "maxConcurrentScans": {
+              "type": "integer",
+              "default": 5,
+              "minimum": 1,
+              "maximum": 20
+            }
+          }
+        },
+        "scheduled": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "failedJobsHistoryLimit": {
+              "type": "integer",
+              "default": 3
+            },
+            "successfulJobsHistoryLimit": {
+              "type": "integer",
+              "default": 1
+            }
+          }
+        }
+      }
+    },
+    "scanTarget": {
+      "type": "string",
+      "default": "",
+      "description": "Specific application name to scan (empty for all applications)"
+    },
+    "applications": {
+      "type": "array",
+      "default": [],
+      "description": "Application configurations (overrides configs/applications.yaml)",
+      "items": {
+        "type": "object",
+        "required": ["name", "namespace", "labelSelector", "projectGroup"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Human-readable application name"
+          },
+          "namespace": {
+            "type": "string",
+            "description": "Kubernetes namespace where the application is deployed"
+          },
+          "labelSelector": {
+            "type": "string",
+            "description": "Kubernetes label selector to find pods"
+          },
+          "projectGroup": {
+            "type": "string",
+            "description": "Black Duck Project Group name"
+          },
+          "projectTier": {
+            "type": "integer",
+            "enum": [1, 2, 3, 4],
+            "default": 3,
+            "description": "Priority tier (1=Critical, 2=High, 3=Medium, 4=Low)"
+          },
+          "projectPhase": {
+            "type": "string",
+            "enum": ["PLANNING", "DEVELOPMENT", "PRERELEASE", "RELEASED", "DEPRECATED", "ARCHIVED"],
+            "default": "DEVELOPMENT"
+          },
+          "projectVersion": {
+            "type": "string",
+            "description": "Explicit version override (auto-detected if not specified)"
+          },
+          "policyGating": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable policy enforcement for this application"
+          },
+          "policyGatingRisk": {
+            "type": "string",
+            "default": "",
+            "description": "Comma-separated severity levels that cause failures (e.g., 'BLOCKER,CRITICAL')"
+          },
+          "scanOnDeploy": {
+            "type": "boolean",
+            "default": false,
+            "description": "Automatically scan when deployment changes (Phase 2)"
+          },
+          "scanSchedule": {
+            "type": "string",
+            "description": "Cron expression for scheduled scans (Phase 2)"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description"
+          }
+        }
+      }
+    },
+    "scanner": {
+      "type": "object",
+      "description": "Scanner container configuration",
+      "properties": {
+        "image": {
+          "type": "string",
+          "default": "ghcr.io/snps-steve/bd-selfscan/bd-selfscan:latest"
+        },
+        "imagePullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"],
+          "default": "Always"
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "properties": {
+                "memory": {
+                  "type": "string",
+                  "default": "2Gi"
+                },
+                "cpu": {
+                  "type": "string",
+                  "default": "500m"
+                },
+                "ephemeral-storage": {
+                  "type": "string",
+                  "default": "10Gi"
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "properties": {
+                "memory": {
+                  "type": "string",
+                  "default": "8Gi"
+                },
+                "cpu": {
+                  "type": "string",
+                  "default": "4"
+                },
+                "ephemeral-storage": {
+                  "type": "string",
+                  "default": "50Gi"
+                }
+              }
+            }
+          }
+        },
+        "job": {
+          "type": "object",
+          "properties": {
+            "backoffLimit": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 0,
+              "maximum": 10
+            },
+            "activeDeadlineSeconds": {
+              "type": "integer",
+              "default": 3600,
+              "minimum": 300
+            },
+            "ttlSecondsAfterFinished": {
+              "type": "integer",
+              "default": 86400
+            }
+          }
+        }
+      }
+    },
+    "scanning": {
+      "type": "object",
+      "description": "Scanning behavior configuration",
+      "properties": {
+        "projectTier": {
+          "type": "integer",
+          "default": 3,
+          "enum": [1, 2, 3, 4]
+        },
+        "scanTimeout": {
+          "type": "integer",
+          "default": 1800,
+          "minimum": 300,
+          "maximum": 7200
+        },
+        "maxConcurrentScans": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 10
+        },
+        "enableVulnerabilityScanning": {
+          "type": "boolean",
+          "default": true
+        },
+        "enableLicenseScanning": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "debug": {
+      "type": "object",
+      "description": "Debug and logging configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "logLevel": {
+          "type": "string",
+          "enum": ["DEBUG", "INFO", "WARNING", "ERROR"],
+          "default": "INFO"
+        },
+        "keepTempFiles": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "monitoring": {
+      "type": "object",
+      "description": "Monitoring and observability configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "interval": {
+              "type": "string",
+              "default": "30s"
+            }
+          }
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "description": "Network policy configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    }
+  }
+}

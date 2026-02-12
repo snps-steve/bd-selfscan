@@ -39,7 +39,7 @@ dependencies: []
 # Chart annotations
 annotations:
   category: Security
-  licenses: MIT
+  licenses: BSL-1.1
   images: |
     - name: alpine
       image: docker.io/alpine:3.19

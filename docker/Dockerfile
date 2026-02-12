@@ -1,7 +1,7 @@
 # BD SelfScan Scanner Container Image - Security Hardened
 FROM ubuntu:22.04
 
-LABEL maintainer="your-team@company.com"
+LABEL maintainer="smiths@blackduck.com"
 LABEL description="BD SelfScan Container Scanner with BDSC support"
 LABEL version="1.0.0"
 LABEL org.opencontainers.image.source="https://github.com/your-org/bd-selfscan"

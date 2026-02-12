@@ -539,7 +539,9 @@ execute_scan() {
                 ;;
         esac
         
-        return 3
+        # Return the actual exit code for proper CI/CD integration
+        # Exit code 9 = policy violation, which should be preserved
+        return $exit_code
     fi
 }
 
