@@ -417,6 +417,116 @@ securityProfiles:
           drop: ["ALL"]
           add: ["DAC_OVERRIDE", "FOWNER"]  # Minimal set
 
+# External Secrets Operator Integration
+# Supports: AWS Secrets Manager, HashiCorp Vault, Azure Key Vault, GCP Secret Manager
+externalSecrets:
+  enabled: false
+  # Secret store reference (must be pre-configured in your cluster)
+  secretStoreRef:
+    name: "cluster-secret-store"
+    kind: "ClusterSecretStore"  # or "SecretStore" for namespace-scoped
+  # Refresh interval for secret synchronization
+  refreshInterval: "1h"
+  # Provider-specific configuration
+  provider: "vault"  # Options: vault, aws, azure, gcp
+  
+  # HashiCorp Vault configuration
+  vault:
+    path: "secret/data/bd-selfscan/blackduck"
+  
+  # AWS Secrets Manager configuration
+  aws:
+    secretName: "bd-selfscan/blackduck-credentials"
+    region: "us-east-1"
+  
+  # Azure Key Vault configuration
+  azure:
+    urlSecretName: "blackduck-url"
+    tokenSecretName: "blackduck-token"
+  
+  # GCP Secret Manager configuration
+  gcp:
+    urlSecretName: "blackduck-url"
+    tokenSecretName: "blackduck-token"
+    projectId: ""
+
+# Notification Configuration
+# Supports: Slack, Microsoft Teams, Generic Webhooks
+notifications:
+  enabled: false
+  
+  # When to send notifications
+  onSuccess: false
+  onFailure: true
+  onPolicyViolation: true
+  
+  # Slack configuration
+  slack:
+    enabled: false
+    # Webhook URL (can also be provided via secret)
+    webhookUrl: ""
+    # Or reference a secret containing the webhook URL
+    webhookSecretRef:
+      name: ""
+      key: "webhook-url"
+    channel: "#security-alerts"
+    username: "BD SelfScan"
+  
+  # Microsoft Teams configuration
+  teams:
+    enabled: false
+    webhookUrl: ""
+    webhookSecretRef:
+      name: ""
+      key: "webhook-url"
+  
+  # Generic webhook configuration (for custom integrations)
+  genericWebhook:
+    enabled: false
+    url: ""
+    secretRef:
+      name: ""
+      key: "webhook-url"
+    # Custom headers (optional)
+    headers: {}
+    # headers:
+    #   Authorization: "Bearer ${TOKEN}"
+    #   X-Custom-Header: "value"
+
+# GitOps Integration
+# Supports: ArgoCD, Flux
+gitops:
+  # ArgoCD integration
+  argocd:
+    enabled: false
+    # Enable ArgoCD notification templates
+    notifications: true
+    # Sync wave for scan jobs (run after deployment)
+    syncWave: "10"
+    # Hook configuration
+    hook: "PostSync"
+    hookDeletePolicy: "HookSucceeded"
+  
+  # Flux integration
+  flux:
+    enabled: false
+    # Slack notifications via Flux
+    slack:
+      channel: "security-alerts"
+      secretRef: "flux-slack-webhook"
+    # Teams notifications via Flux
+    teams:
+      enabled: false
+      secretRef: "flux-teams-webhook"
+    # Alert filters (exclude certain events)
+    alertFilters: []
+    # - ".*test.*"
+    # Image automation (auto-update scanner image)
+    imageAutomation:
+      enabled: false
+      interval: "1h"
+      secretRef: ""
+
 # Troubleshooting helpers
 troubleshooting:
   # Enable debug pod for testing

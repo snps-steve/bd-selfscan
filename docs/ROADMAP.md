@@ -81,52 +81,52 @@ This document tracks the current implementation status and future development pl
 
 ## 🛣️ **Development Roadmap**
 
-### Q1 2025 - Phase 2 Completion
-- [ ] Complete scheduled scanning implementation
-- [ ] Finalize policy integration features  
+### Q1 2025 - Phase 2 Completion ✅
+- [x] Complete scheduled scanning implementation
+- [x] Finalize policy integration features
+- [x] Prometheus metrics endpoint (port 8080)
+- [x] Retry logic with exponential backoff
+- [x] External Secrets Operator integration
+
+### Q2 2025 - Advanced Features ✅
+- [x] GitOps integration with ArgoCD and Flux
+- [x] Slack/Teams notification systems
+- [x] Custom policy frameworks per application
 - [ ] Comprehensive testing and validation
 - [ ] Production deployment documentation
-- [ ] Performance optimization and tuning
 
-### Q2 2025 - Advanced Features
-- [ ] GitOps integration with ArgoCD and Flux
-- [ ] Advanced notification systems
-- [ ] Custom policy frameworks per application
-- [ ] Multi-cluster federation support
-- [ ] Enhanced security and compliance features
-
-### Q3 2025 - Enterprise Features  
-- [ ] Enterprise authentication integration (LDAP, SAML)
+### Q3 2025 - Quality & Testing
+- [ ] End-to-end integration testing
+- [ ] Performance profiling and optimization
+- [ ] Structured JSON logging for observability
+- [ ] Policy exception management workflow
 - [ ] Advanced reporting and analytics
-- [ ] API gateway integration
-- [ ] Disaster recovery and backup procedures
-- [ ] High availability deployment patterns
 
 ### Q4 2025 - Ecosystem Integration
-- [ ] CI/CD pipeline integrations (Jenkins, GitHub Actions, GitLab)
+- [ ] CI/CD pipeline examples (Jenkins, GitHub Actions, GitLab)
 - [ ] Container registry integrations (Harbor, ECR, ACR)
 - [ ] Security orchestration platform integrations
-- [ ] Advanced vulnerability correlation and trending
 
 ## 🔧 **Technical Debt and Improvements**
 
 ### High Priority
-- [ ] Migrate from shell scripts to Python for better maintainability
-- [ ] Implement proper secret management (HashiCorp Vault, External Secrets)
+- [x] ~~Implement proper secret management (HashiCorp Vault, External Secrets)~~ ✅ Implemented
 - [ ] Add comprehensive API rate limiting and circuit breakers
-- [ ] Implement proper database backing for persistent state
+- [ ] Structured JSON logging for log aggregation
 
-### Medium Priority  
+### Medium Priority
 - [ ] Container image vulnerability scanning for the scanner itself
 - [ ] Automated security scanning of the BD SelfScan codebase
 - [ ] Performance profiling and optimization
 - [ ] Memory usage optimization for large container scans
 
-### Low Priority
-- [ ] Migration to Kubernetes operators framework (kubebuilder/operator-sdk)
-- [ ] Alternative container runtime support (containerd, CRI-O)
-- [ ] Advanced container image caching strategies
-- [ ] Support for additional vulnerability databases
+### Deprioritized (Not Recommended)
+The following items have been evaluated and deprioritized:
+- ~~Migrate from shell scripts to Python~~ - Shell scripts work well for this use case
+- ~~Migration to Kubernetes operators framework~~ - Current controller.py approach is sufficient
+- ~~Multi-cluster federation support~~ - Complex with limited demand; run per-cluster instead
+- ~~Enterprise authentication (LDAP/SAML)~~ - Uses Black Duck's auth; not BD SelfScan's responsibility
+- ~~Database backing for persistent state~~ - Adds unnecessary complexity
 
 ## 📊 **Success Metrics**
 

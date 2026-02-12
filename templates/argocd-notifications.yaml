@@ -1,0 +1,86 @@
+{{- if .Values.gitops.argocd.enabled }}
+# ArgoCD Integration for BD SelfScan
+# This ConfigMap provides ArgoCD notification templates for scan results
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-argocd-notifications
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+    # ArgoCD notification template label
+    notifications.argoproj.io/template: "true"
+  annotations:
+    description: "ArgoCD notification templates for BD SelfScan"
+data:
+  # Notification template for scan completion
+  template.bd-selfscan-scan-complete: |
+    message: |
+      BD SelfScan completed for {{`{{.app.metadata.name}}`}}
+      Status: {{`{{.app.status.sync.status}}`}}
+      Health: {{`{{.app.status.health.status}}`}}
+    slack:
+      attachments: |
+        [{
+          "title": "BD SelfScan: {{`{{.app.metadata.name}}`}}",
+          "color": "{{`{{if eq .app.status.health.status \"Healthy\"}}good{{else}}danger{{end}}`}}",
+          "fields": [
+            {"title": "Application", "value": "{{`{{.app.metadata.name}}`}}", "short": true},
+            {"title": "Namespace", "value": "{{`{{.app.spec.destination.namespace}}`}}", "short": true},
+            {"title": "Sync Status", "value": "{{`{{.app.status.sync.status}}`}}", "short": true},
+            {"title": "Health", "value": "{{`{{.app.status.health.status}}`}}", "short": true}
+          ]
+        }]
+  
+  # Trigger for post-sync scan
+  trigger.on-sync-succeeded: |
+    - when: app.status.sync.status == 'Synced'
+      send: [bd-selfscan-scan-complete]
+  
+  # Trigger for health degradation (potential scan failure)
+  trigger.on-health-degraded: |
+    - when: app.status.health.status == 'Degraded'
+      send: [bd-selfscan-scan-complete]
+---
+# ArgoCD Application annotations for BD SelfScan integration
+# Apply these annotations to your ArgoCD Applications to enable auto-scanning
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-argocd-annotations
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+data:
+  # Example annotations to add to ArgoCD Applications
+  annotations.yaml: |
+    # Add these annotations to your ArgoCD Application to enable BD SelfScan
+    metadata:
+      annotations:
+        # Enable BD SelfScan for this application
+        bd-selfscan.io/enabled: "true"
+        
+        # Scan trigger configuration
+        bd-selfscan.io/scan-on-sync: "true"
+        bd-selfscan.io/scan-on-health-change: "false"
+        
+        # Policy gating configuration
+        bd-selfscan.io/policy-gating: "true"
+        bd-selfscan.io/policy-severities: "BLOCKER,CRITICAL"
+        
+        # Project mapping
+        bd-selfscan.io/project-group: "My Project Group"
+        bd-selfscan.io/project-tier: "2"
+        
+        # Notification preferences
+        bd-selfscan.io/notify-on-success: "false"
+        bd-selfscan.io/notify-on-failure: "true"
+        bd-selfscan.io/notify-on-policy-violation: "true"
+        
+        # ArgoCD sync wave (run scan after deployment)
+        argocd.argoproj.io/sync-wave: "10"
+        
+        # Hook for post-sync scanning
+        argocd.argoproj.io/hook: PostSync
+        argocd.argoproj.io/hook-delete-policy: HookSucceeded
+{{- end }}

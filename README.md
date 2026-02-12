@@ -835,13 +835,34 @@ The following enhancements have been implemented to improve usability, reliabili
    - Scalability improvements
    - Future enhancement roadmap
 
-### Future Enhancements (Planned)
+### Recently Implemented Enhancements ✅
 
-- **Prometheus Metrics**: Add `/metrics` endpoint for monitoring
-- **Structured Logging**: JSON logging for better observability
-- **Retry Logic**: Automatic retry for transient failures
-- **Resource Quotas**: Namespace-level resource management
-- **Multi-cluster Support**: Federation for large deployments
+1. **Prometheus Metrics** ([`scripts/controller.py`](scripts/controller.py:43))
+   - Full metrics endpoint on port 8080
+   - Scan job counters, duration histograms, policy violation tracking
+   - Controller health gauge for monitoring
+
+2. **Retry Logic with Exponential Backoff** ([`scripts/common-functions.sh`](scripts/common-functions.sh:26))
+   - Automatic retry for transient failures
+   - Configurable max attempts and initial delay
+   - Exponential backoff between retries
+
+3. **External Secrets Operator Support** ([`templates/external-secret.yaml`](templates/external-secret.yaml))
+   - HashiCorp Vault integration
+   - AWS Secrets Manager support
+   - Azure Key Vault support
+   - GCP Secret Manager support
+
+4. **Slack/Teams Webhook Notifications** ([`scripts/notifications.sh`](scripts/notifications.sh))
+   - Slack webhook integration with rich formatting
+   - Microsoft Teams Adaptive Card support
+   - Generic webhook for custom integrations
+   - Configurable notification triggers (success/failure/policy violation)
+
+5. **GitOps Integration** ([`templates/argocd-notifications.yaml`](templates/argocd-notifications.yaml), [`templates/flux-notifications.yaml`](templates/flux-notifications.yaml))
+   - ArgoCD notification templates and sync hooks
+   - Flux notification providers and alerts
+   - Image automation policies for auto-updates
 
 ## 🛣️ Roadmap
 
@@ -855,19 +876,19 @@ The following enhancements have been implemented to improve usability, reliabili
 - [x] **Enhanced diagnostic and testing scripts (v2.1.0)**
 - [x] Cluster-wide RBAC and security
 
-### Phase 2 🚧 (In Process)
+### Phase 2 ✅ (Complete)
 - [x] Kubernetes controller for deployment events
 - [x] Automated scan triggering with policy enforcement
 - [x] Scheduled scanning with cron (CronJob templates)
 - [x] Health checks and self-healing (controller probes)
-- [ ] Testing scan automation (integration tests)
-- [ ] Policy violation notifications (Slack/Teams)
+- [x] **Prometheus metrics endpoint** (port 8080)
+- [x] **Slack/Teams notifications** for policy violations
+- [x] **External Secrets Operator** integration
+- [x] **GitOps integration** (ArgoCD/Flux)
 
-### Future Enhancements
-- [ ] Advanced policy customization per application
-- [ ] Slack/Teams notification integration for policy violations
-- [ ] Multi-cluster federation support
-- [ ] GitOps integration (ArgoCD/Flux) with policy gates
+### Phase 3 🚧 (In Progress)
+- [ ] Testing scan automation (integration tests)
+- [ ] Structured JSON logging for log aggregation
 - [ ] Policy exception management workflow
 
 ## 🤝 Contributing

@@ -1,0 +1,91 @@
+{{- if .Values.gitops.flux.enabled }}
+# Flux Integration for BD SelfScan
+# Provides Flux notification and alert configurations for scan results
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Provider
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-slack
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+spec:
+  type: slack
+  channel: {{ .Values.gitops.flux.slack.channel | default "security-alerts" }}
+  {{- if .Values.gitops.flux.slack.secretRef }}
+  secretRef:
+    name: {{ .Values.gitops.flux.slack.secretRef }}
+  {{- end }}
+---
+{{- if .Values.gitops.flux.teams.enabled }}
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Provider
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-teams
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+spec:
+  type: msteams
+  {{- if .Values.gitops.flux.teams.secretRef }}
+  secretRef:
+    name: {{ .Values.gitops.flux.teams.secretRef }}
+  {{- end }}
+{{- end }}
+---
+# Alert for BD SelfScan scan job events
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Alert
+metadata:
+  name: {{ include "bd-selfscan.name" . }}-scan-alerts
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+spec:
+  summary: "BD SelfScan security scan notification"
+  providerRef:
+    name: {{ include "bd-selfscan.name" . }}-slack
+  eventSeverity: info
+  eventSources:
+    - kind: Job
+      name: "*"
+      namespace: {{ .Values.global.namespace }}
+    - kind: Kustomization
+      name: "*"
+      namespace: {{ .Values.global.namespace }}
+  {{- if .Values.gitops.flux.alertFilters }}
+  exclusionList:
+    {{- toYaml .Values.gitops.flux.alertFilters | nindent 4 }}
+  {{- end }}
+---
+# ImagePolicy for automatic image updates (optional)
+{{- if .Values.gitops.flux.imageAutomation.enabled }}
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImageRepository
+metadata:
+  name: {{ include "bd-selfscan.name" . }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+spec:
+  image: {{ .Values.scanner.image | default "ghcr.io/snps-steve/bd-selfscan/bd-selfscan" }}
+  interval: {{ .Values.gitops.flux.imageAutomation.interval | default "1h" }}
+  {{- if .Values.gitops.flux.imageAutomation.secretRef }}
+  secretRef:
+    name: {{ .Values.gitops.flux.imageAutomation.secretRef }}
+  {{- end }}
+---
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImagePolicy
+metadata:
+  name: {{ include "bd-selfscan.name" . }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "bd-selfscan.labels" . | nindent 4 }}
+spec:
+  imageRepositoryRef:
+    name: {{ include "bd-selfscan.name" . }}
+  policy:
+    semver:
+      range: ">=1.0.0"
+{{- end }}
+{{- end }}
