@@ -902,7 +902,7 @@ pip install -r scripts/requirements-dev.txt
 
 ## 🏆 Acknowledgments
 
-- **Synopsys Black Duck** - Container scanning technology
+- **Black Duck SCA** - Container scanning technology
 - **Kubernetes Community** - Container orchestration platform  
 - **Helm Community** - Package management for Kubernetes
 
