@@ -165,6 +165,129 @@ kubectl apply -f configs/applications.yaml
 helm upgrade bd-selfscan ./bd-selfscan
 ```
 
+## 📅 Scanning Modes: On-Demand vs Automated
+
+BD SelfScan supports two scanning modes that can be used independently or together:
+
+### On-Demand Scanning (Default)
+
+On-demand scanning creates a Kubernetes Job each time you trigger a scan manually. This is ideal for:
+- Initial setup and testing
+- Ad-hoc security assessments
+- CI/CD pipeline integration
+- Scanning after specific deployments
+
+**Enable On-Demand Scanning** (enabled by default):
+```yaml
+# values.yaml
+onDemand:
+  enabled: true
+```
+
+**Trigger On-Demand Scans**:
+```bash
+# Scan a specific application
+helm upgrade bd-selfscan . --set scanTarget="My Application"
+
+# Scan all configured applications
+helm upgrade bd-selfscan .
+
+# Using Makefile shortcuts
+make scan APP="My Application"
+make scan-all
+```
+
+### Automated/Scheduled Scanning
+
+Automated scanning uses Kubernetes CronJobs to run scans on a schedule. This is ideal for:
+- Regular security compliance checks
+- Continuous monitoring of production workloads
+- Detecting newly discovered vulnerabilities in existing deployments
+
+**Enable Scheduled Scanning**:
+```yaml
+# values.yaml
+automated:
+  enabled: true
+  scheduled:
+    enabled: true                    # Enable CronJob creation
+    failedJobsHistoryLimit: 3        # Keep last 3 failed jobs
+    successfulJobsHistoryLimit: 1    # Keep last successful job
+    startingDeadlineSeconds: 300     # Max delay before skipping
+```
+
+**Configure Per-Application Schedules**:
+
+Add `scanSchedule` to each application in `configs/applications.yaml`:
+```yaml
+applications:
+  # Daily scan at 2 AM UTC
+  - name: "Production API"
+    namespace: "production"
+    labelSelector: "app=api-gateway"
+    projectGroup: "Production Services"
+    projectTier: 1
+    policyGating: true
+    scanSchedule: "0 2 * * *"        # Cron expression: daily at 2 AM
+    
+  # Weekly scan on Sundays at midnight
+  - name: "Internal Tools"
+    namespace: "internal"
+    labelSelector: "app=admin-dashboard"
+    projectGroup: "Internal Tools"
+    projectTier: 3
+    policyGating: true
+    scanSchedule: "0 0 * * 0"        # Cron expression: Sundays at midnight
+    
+  # No scheduled scan (on-demand only)
+  - name: "Development App"
+    namespace: "dev"
+    labelSelector: "app=dev-service"
+    projectGroup: "Development"
+    projectTier: 4
+    policyGating: false
+    # No scanSchedule = on-demand only
+```
+
+**Common Cron Schedule Examples**:
+| Schedule | Cron Expression | Description |
+|----------|-----------------|-------------|
+| Daily at 2 AM | `0 2 * * *` | Every day at 2:00 AM |
+| Every 6 hours | `0 */6 * * *` | At minute 0 of every 6th hour |
+| Weekly (Sunday) | `0 0 * * 0` | Every Sunday at midnight |
+| Monthly (1st) | `0 0 1 * *` | First day of month at midnight |
+| Weekdays at 6 AM | `0 6 * * 1-5` | Monday-Friday at 6:00 AM |
+
+**Deploy with Scheduled Scanning**:
+```bash
+# Install with scheduled scanning enabled
+helm install bd-selfscan . \
+  --namespace bd-selfscan-system \
+  --set automated.enabled=true \
+  --set automated.scheduled.enabled=true
+
+# Verify CronJobs were created
+kubectl get cronjobs -n bd-selfscan-system
+
+# Check next scheduled run times
+kubectl get cronjobs -n bd-selfscan-system -o wide
+```
+
+**Monitor Scheduled Scans**:
+```bash
+# View CronJob status
+kubectl get cronjobs -n bd-selfscan-system
+
+# View jobs created by CronJobs
+kubectl get jobs -n bd-selfscan-system -l scan-type=scheduled
+
+# View logs from most recent scheduled scan
+kubectl logs -n bd-selfscan-system -l scan-type=scheduled --tail=100
+
+# Manually trigger a scheduled scan (for testing)
+kubectl create job --from=cronjob/bd-selfscan-production-api manual-test -n bd-selfscan-system
+```
+
 ## 🛠️ Makefile Commands
 
 The project includes a Makefile for common operations. Run `make help` to see all available commands:
@@ -417,13 +540,23 @@ BD SelfScan supports three policy enforcement modes:
 - Debug mode for troubleshooting
 - Comprehensive error handling and logging
 
-### Phase 2: Automated Scanning 🚧 **PLANNED**
+### Phase 2: Automated Scanning ✅ **COMPLETE**
 
-**Planned Features**:
-- Kubernetes operator to watch for deployment events
-- Automatic scanning when pods are created/updated
-- Scheduled scanning based on cron expressions
-- Integration with GitOps workflows
+**Current Status**: Fully implemented with CronJob-based scheduling
+
+**Components**:
+- Kubernetes CronJob templates for scheduled execution
+- Per-application schedule configuration via `scanSchedule` field
+- Controller deployment for event-driven automation
+- GitOps integration (ArgoCD/Flux notifications)
+
+**Key Features**:
+- **Scheduled scanning** with per-application cron expressions
+- Automatic CronJob creation for each application with a schedule
+- Concurrency control (prevents overlapping scans for same application)
+- Job history management (configurable retention)
+- Integration with Prometheus metrics and alerting
+- Slack/Teams webhook notifications
 
 ## 🔧 Technical Implementation
 
