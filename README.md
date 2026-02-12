@@ -369,34 +369,45 @@ BD SelfScan supports three policy enforcement modes:
 bd-selfscan/
 ├── Chart.yaml                           # Helm chart metadata
 ├── values.yaml                          # Default configuration values
-├── README.md                           # This file
+├── values.schema.json                   # JSON Schema for values validation
+├── Makefile                             # Common operations (install, scan, etc.)
+├── .helmignore                          # Files to exclude from Helm packages
+├── README.md                            # This file
+├── EVALUATION_AND_IMPROVEMENTS.md       # Codebase evaluation and improvements
 ├── configs/
-│   ├── applications.yaml              # Application configuration with policy gating
-│   └── README.md                       # Configuration guide
+│   ├── applications.yaml                # Application configuration with policy gating
+│   └── README.md                        # Configuration guide
 ├── templates/
-│   ├── _helpers.tpl                    # Helm template helpers
-│   ├── namespace.yaml                  # System namespace
-│   ├── rbac.yaml                       # Cluster RBAC resources
-│   ├── configmap-apps.yaml            # Applications ConfigMap
-│   ├── configmap-scanner-script.yaml  # Enhanced scanner scripts (v2.1.0)
-│   ├── job-on-demand.yaml             # On-demand scan jobs
-│   └── deployment-controller.yaml     # Phase 2 controller (planned)
+│   ├── _helpers.tpl                     # Helm template helpers
+│   ├── namespace.yaml                   # System namespace
+│   ├── rbac.yaml                        # Cluster RBAC resources
+│   ├── configmap-apps.yaml              # Applications ConfigMap
+│   ├── configmap-scanner-script.yaml    # Enhanced scanner scripts (v2.1.0)
+│   ├── job-on-demand.yaml               # On-demand scan jobs
+│   ├── deployment-controller.yaml       # Phase 2 controller (planned)
+│   └── tests/
+│       └── test-connection.yaml         # Helm chart tests
 ├── scripts/
-│   ├── scan-application.sh            # Single application scanner (v2.1.0)
-│   ├── scan-all-applications.sh       # Bulk application scanner (v2.1.0)
-│   ├── bdsc-container-scan.sh         # Core BDSC scanning logic (v2.0.0)
-│   ├── test-policy-gating.sh          # NEW: Policy gating testing script
-│   ├── health-check.sh                # Enhanced health check with policy testing
-│   ├── common-functions.sh            # Enhanced utility functions (v2.1.0)
-│   ├── controller.py                  # Phase 2 controller (planned)
-│   └── README.md                       # Scripts documentation
+│   ├── scan-application.sh              # Single application scanner (v2.1.0)
+│   ├── scan-all-applications.sh         # Bulk application scanner (v2.1.0)
+│   ├── bdsc-container-scan.sh           # Core BDSC scanning logic (v2.0.0)
+│   ├── test-policy-gating.sh            # Policy gating testing script
+│   ├── health-check.sh                  # Enhanced health check with policy testing
+│   ├── common-functions.sh              # Enhanced utility functions (v2.1.0)
+│   ├── controller.py                    # Phase 2 controller (planned)
+│   └── README.md                        # Scripts documentation
 ├── bin/
-│   └── diagnostic.sh                  # Enhanced diagnostic script
+│   ├── diagnostic.sh                    # Enhanced diagnostic script
+│   ├── preflight-check.sh               # Pre-installation validation script
+│   ├── blackduck_sca_auth_audit.sh      # Black Duck authentication audit
+│   └── github_auth_audit.sh             # GitHub authentication audit
 └── docs/
-    ├── INSTALL.md                      # Detailed installation guide
-    ├── CONFIGURATION.md               # Configuration reference with policy gating
-    ├── API.md                         # API documentation
-    └── TROUBLESHOOTING.md             # Common issues and solutions
+    ├── INSTALL.md                       # Detailed installation guide
+    ├── CONFIGURATION.md                 # Configuration reference with policy gating
+    ├── API.md                           # API documentation
+    ├── ARCHITECTURE.md                  # System architecture documentation
+    ├── ROADMAP.md                       # Project roadmap
+    └── TROUBLESHOOTING.md               # Common issues and solutions
 ```
 
 ## ⚙️ Configuration
