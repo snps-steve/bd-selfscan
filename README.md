@@ -847,7 +847,7 @@ The following enhancements have been implemented to improve usability, reliabili
 
 ### Phase 1 ✅ (Complete)
 - [x] On-demand multi-application scanning
-- [x] Configuration-driven application mapping  
+- [x] Configuration-driven application mapping
 - [x] BDSC Container scanning integration
 - [x] **Per-application policy gating and enforcement**
 - [x] **Intelligent version detection with explicit overrides**
@@ -858,10 +858,10 @@ The following enhancements have been implemented to improve usability, reliabili
 ### Phase 2 🚧 (In Process)
 - [x] Kubernetes controller for deployment events
 - [x] Automated scan triggering with policy enforcement
-- [ ] Testing scan automation 
-- [ ] Scheduled scanning with cron
-- [ ] Health checks and self-healing
-- [ ] Policy violation notifications
+- [x] Scheduled scanning with cron (CronJob templates)
+- [x] Health checks and self-healing (controller probes)
+- [ ] Testing scan automation (integration tests)
+- [ ] Policy violation notifications (Slack/Teams)
 
 ### Future Enhancements
 - [ ] Advanced policy customization per application
